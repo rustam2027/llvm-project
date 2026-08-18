@@ -3045,6 +3045,8 @@ bool RewriteStatepointsForGC::runOnFunction(Function &F, DominatorTree &DT,
         return false;
       if (callsGCLeafFunction(Call, TLI))
         return false;
+      if (Call->isInlineAsm())
+        return false;
 
       // Normally it's up to the frontend to make sure that non-leaf calls also
       // have proper deopt state if it is required. We make an exception for

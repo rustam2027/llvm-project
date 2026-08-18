@@ -1,0 +1,77 @@
+//===- KotlinNativeGCPrinter.cpp - Delta-main stack-map emitter ---------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// This file implements the GCMetadataPrinter for the "kotlin-native" GC
+// strategy (see llvm/lib/IR/BuiltinGCs.cpp): it emits the delta-main
+// compressed stack-map format consumed by the Kotlin/Native runtime GC,
+// instead of LLVM's default StackMaps format.
+//
+//===----------------------------------------------------------------------===//
+
+#include "../DeltaMainStackMapEncoder.h"
+#include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/GCMetadataPrinter.h"
+#include "llvm/CodeGen/StackMaps.h"
+#include "llvm/IR/BuiltinGCs.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSymbol.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/Triple.h"
+
+using namespace llvm;
+
+namespace {
+
+class KotlinNativeGCPrinter : public GCMetadataPrinter {
+public:
+  bool emitStackMaps(StackMaps &SM, AsmPrinter &AP) override;
+};
+
+} // end anonymous namespace
+
+static GCMetadataPrinterRegistry::Add<KotlinNativeGCPrinter>
+    X("kotlin-native", "Kotlin/Native GC strategy (delta-main stack maps)");
+
+void llvm::linkKotlinNativeGCPrinter() {}
+
+bool KotlinNativeGCPrinter::emitStackMaps(StackMaps &SM, AsmPrinter &AP) {
+  // This port's encoder relies on an AArch64-specific register-enumeration
+  // scheme (see DeltaMainStackMapEncoder::enumerate);
+  if (AP.TM.getTargetTriple().getArch() != Triple::aarch64)
+    report_fatal_error(
+        "the \"kotlin-native\" GC strategy's delta-main stack-map format is "
+        "only implemented for AArch64 in this build");
+
+  // Nothing to do if no callsite was ever recorded.
+  if (SM.getCSInfos().empty())
+    return true;
+
+  // Register-liveness tracking is not wired up to a location source yet.
+  // (see DeltaMainStackMapEncoder.h)
+  const int DeltaMainVersion = 3;
+  const bool LazyEnabled = false;
+  const bool EmitRegisters = false;
+
+  DeltaMainStackMapEncoder Encoder(DeltaMainVersion, EmitRegisters, LazyEnabled);
+  deltamain::EncodedStackMap Map = Encoder.build(SM);
+
+  MCContext &Ctx = AP.OutStreamer->getContext();
+  AP.OutStreamer->switchSection(Ctx.getObjectFileInfo()->getStackMapSection());
+
+  // Emit a dummy symbol to force section inclusion, and to give
+  // DeltaMainStackMapEncoder::emit a fixed point to express each function's
+  // offset relative to.
+  AP.OutStreamer->emitLabel(Ctx.getOrCreateSymbol("__LLVM_StackMaps"));
+
+  Encoder.emit(*AP.OutStreamer, Map);
+
+  return true;
+}
