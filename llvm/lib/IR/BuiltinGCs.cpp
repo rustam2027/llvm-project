@@ -133,13 +133,12 @@ public:
     ForceRegisterSpill = true;
   }
 
-  // Conservatively think of any pointer as managed.
-  // std::optional<bool> isGCManagedPointer(const Type *Ty) const override {
-  //   // Method is only valid on pointer typed values.
-  //   const PointerType *PT = cast<PointerType>(Ty);
-  //   // Kotlin/Native uses addrspace(1) for its GC-managed heap.
-  //   return (1 == PT->getAddressSpace());
-  // }
+  std::optional<bool> isGCManagedPointer(const Type *Ty) const override {
+    // Method is only valid on pointer typed values.
+    const PointerType *PT = cast<PointerType>(Ty);
+    // Kotlin/Native uses addrspace(1) for its GC-managed heap.
+    return (1 == PT->getAddressSpace());
+  }
 };
 
 } // end anonymous namespace
