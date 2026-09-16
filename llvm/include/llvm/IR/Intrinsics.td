@@ -1740,6 +1740,21 @@ def int_experimental_gc_relocate : DefaultAttrsIntrinsic<
     [llvm_any_ty], [llvm_token_ty, llvm_i32_ty, llvm_i32_ty],
     [IntrNoMem, ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>]>;
 
+// A normal-path gc.statepoint call produces a real `token` value that
+// experimental_gc_relocate's first argument expects. On the exceptional
+// (unwind) path there is no such token - RS4GC would normally reuse the
+// landingpad instruction itself as a stand-in, but a real landingpad (the
+// kind Kotlin/Native's exception handling emits) has a different, fixed
+// type, not `token`, which experimental_gc_relocate rejects. kn_gc_relocate
+// sidesteps the conflict: its first argument is a plain i32 instead of a
+// token, reusing the 32-bit "type selector" field the exception-handling
+// code already extracts from the landingpad for its own purposes (deciding
+// which catch clause matches) as the stand-in token. No new value is
+// invented, and ordinary (non-Kotlin) exception handling is untouched.
+def int_experimental_kn_gc_relocate : DefaultAttrsIntrinsic<
+    [llvm_any_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+    [IntrNoMem, ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>]>;
+
 def int_experimental_gc_get_pointer_base : DefaultAttrsIntrinsic<
     [llvm_anyptr_ty], [llvm_anyptr_ty],
     [IntrNoMem, ReadNone<ArgIndex<0>>, NoCapture<ArgIndex<0>>]>;

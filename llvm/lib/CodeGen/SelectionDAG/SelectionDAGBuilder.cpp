@@ -7705,6 +7705,7 @@ void SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I,
     visitGCResult(cast<GCResultInst>(I));
     return;
   case Intrinsic::experimental_gc_relocate:
+  case Intrinsic::experimental_kn_gc_relocate:
     visitGCRelocate(cast<GCRelocateInst>(I));
     return;
   case Intrinsic::instrprof_cover:
