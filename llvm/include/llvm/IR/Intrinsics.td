@@ -1740,6 +1740,10 @@ def int_experimental_gc_relocate : DefaultAttrsIntrinsic<
     [llvm_any_ty], [llvm_token_ty, llvm_i32_ty, llvm_i32_ty],
     [IntrNoMem, ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>]>;
 
+def int_experimental_kn_gc_relocate : DefaultAttrsIntrinsic<
+    [llvm_any_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+    [IntrNoMem, ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>]>;
+
 def int_experimental_gc_get_pointer_base : DefaultAttrsIntrinsic<
     [llvm_anyptr_ty], [llvm_anyptr_ty],
     [IntrNoMem, ReadNone<ArgIndex<0>>, NoCapture<ArgIndex<0>>]>;
