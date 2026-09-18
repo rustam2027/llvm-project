@@ -3048,11 +3048,17 @@ bool AArch64FrameLowering::enableFullCFIFixup(const MachineFunction &MF) const {
 StackOffset
 AArch64FrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
                                              Register &FrameReg) const {
+  bool PreferFp = MF.getFunction().hasFnAttribute(Attribute::SanitizeHWAddress) ||
+          MF.getFunction().hasFnAttribute(Attribute::SanitizeMemTag);
+  auto& F = MF.getFunction();
+
+  if (F.hasGC()) {
+    PreferFp |= (MF.getFunction().getGC() == "kotlin-native");
+  }
+
   return resolveFrameIndexReference(
       MF, FI, FrameReg,
-      /*PreferFP=*/
-      MF.getFunction().hasFnAttribute(Attribute::SanitizeHWAddress) ||
-          MF.getFunction().hasFnAttribute(Attribute::SanitizeMemTag),
+      PreferFp,
       /*ForSimm=*/false);
 }
 
