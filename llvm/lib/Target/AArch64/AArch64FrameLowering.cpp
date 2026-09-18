@@ -334,6 +334,11 @@ static StackOffset getSVEStackSize(const MachineFunction &MF);
 static Register findScratchNonCalleeSaveRegister(MachineBasicBlock *MBB,
                                                  bool HasCall = false);
 static bool requiresSaveVG(const MachineFunction &MF);
+static StackOffset getFPOffset(const MachineFunction &MF,
+                               int64_t ObjectOffset);
+static StackOffset getStackOffset(const MachineFunction &MF,
+                                  int64_t ObjectOffset);
+
 
 // Conservatively, returns true if the function is likely to have an SVE vectors
 // on the stack. This function is safe to be called before callee-saves or
@@ -1925,7 +1930,7 @@ void AArch64FrameLowering::emitPacRetPlusLeafHardening(
 void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
                                         MachineBasicBlock &MBB) const {
   MachineBasicBlock::iterator MBBI = MBB.begin();
-  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  MachineFrameInfo &MFI = MF.getFrameInfo();
   const Function &F = MF.getFunction();
   const AArch64Subtarget &Subtarget = MF.getSubtarget<AArch64Subtarget>();
   const AArch64RegisterInfo *RegInfo = Subtarget.getRegisterInfo();
@@ -2554,6 +2559,9 @@ void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
     emitCalleeSavedGPRLocations(MBB, MBBI);
     emitCalleeSavedSVELocations(MBB, MBBI);
   }
+
+  if (hasFP(MF))
+    MFI.setOffsetAdjustment(getFPOffset(MF, 0).getFixed() - getStackOffset(MF, 0).getFixed());
 }
 
 static bool isFuncletReturnInstr(const MachineInstr &MI) {

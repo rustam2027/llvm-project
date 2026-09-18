@@ -10,6 +10,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/CodeGen/StackMaps.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCStreamer.h"
@@ -173,18 +174,35 @@ FunctionState DeltaMainStackMapEncoder::buildFunctionState(
   return Func;
 }
 
-void FunctionState::assignSlotIndices() {
+void FunctionState::assignSlotIndices(int64_t FPtoSPDelta) {
   int64_t MaxOffset = INT64_MIN;
   auto NoteOffset = [&MaxOffset](const Location &Loc) {
     if (Loc.Type != Location::Register)
       MaxOffset = std::max<int64_t>(Loc.Offset, MaxOffset);
   };
 
-  for (const State &St : States) {
-    for (const Location &Slot : St.StackSlots)
+  auto LocationConverter = [FPtoSPDelta](Location& Loc) {
+    if (Loc.Type != StackMaps::Location::Indirect) {
+      return;
+    }
+
+    if (Loc.Reg != /*Fp*/ 29) {
+      assert(Loc.Reg == /*Sp*/ 31);
+      Loc.Reg = /*Fp*/ 29;
+      Loc.Offset = Loc.Offset + FPtoSPDelta;
+    }
+  };
+
+  for (State &St : States) {
+    for (Location &Slot : St.StackSlots) {
+      LocationConverter(Slot);
       NoteOffset(Slot);
-    for (const auto &Derived : St.DerivedSlots) {
+    }
+    for (auto &Derived : St.DerivedSlots) {
+      LocationConverter(Derived.first);
       NoteOffset(Derived.first);
+
+      LocationConverter(Derived.second);
       NoteOffset(Derived.second);
     }
   }
@@ -330,7 +348,7 @@ EncodedStackMap DeltaMainStackMapEncoder::build(StackMaps &SM) const {
     if (Func.States.empty())
       continue; // No GC-relevant call site in this function.
 
-    Func.assignSlotIndices();
+    Func.assignSlotIndices(FnInfo.FPtoSPDelta);
     Map.Funcs.push_back(buildFuncDesc(Func));
   }
 

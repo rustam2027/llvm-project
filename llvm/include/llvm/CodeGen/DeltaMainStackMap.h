@@ -74,7 +74,7 @@ struct FunctionState {
   /// States, and sets BaseOffset to the highest stack offset seen. Must run
   /// before the FunctionState is converted to Delta form, since Delta
   /// encodes slots by this index, not by raw offset.
-  void assignSlotIndices();
+  void assignSlotIndices(int64_t FPtoSPDelta);
 };
 
 /// The live-location set of one call site, encoded relative to its

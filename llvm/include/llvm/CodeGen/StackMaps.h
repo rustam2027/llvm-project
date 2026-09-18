@@ -326,9 +326,11 @@ public:
   struct FunctionInfo {
     uint64_t StackSize = 0;
     uint64_t RecordCount = 1;
+    int64_t FPtoSPDelta = 0;
 
     FunctionInfo() = default;
-    explicit FunctionInfo(uint64_t StackSize) : StackSize(StackSize) {}
+    explicit FunctionInfo(uint64_t StackSize) : StackSize(StackSize) {};
+    explicit FunctionInfo(uint64_t StackSize, int64_t FPtoSPDelta) : StackSize(StackSize), FPtoSPDelta(FPtoSPDelta) {};
   };
 
   struct CallsiteInfo {
