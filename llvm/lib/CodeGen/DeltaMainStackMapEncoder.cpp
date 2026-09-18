@@ -15,6 +15,7 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 using namespace llvm::deltamain;
@@ -64,6 +65,36 @@ DeltaMainStackMapEncoder::collectBaseToDerived(
   for (size_t I = RefPairsBegin; I < RefPairsEnd; I += 2) {
     const Location &Base = Locs[I];
     const Location &Derived = Locs[I + 1];
+
+    auto DwarfRegName = [](uint16_t Reg) -> std::string {
+      switch (Reg) {
+        case 29: return "x29/fp";
+        case 30: return "x30/lr";
+        case 31: return "sp";
+        default: return ("x" + Twine(Reg)).str();
+      }
+    };
+    auto PrintLoc = [&](const char *Label, const Location &Loc) {
+      errs() << "    " << Label << ": ";
+      switch (Loc.Type) {
+        case Location::Register:
+          errs() << "REG  " << DwarfRegName(Loc.Reg);
+          break;
+        case Location::Direct:
+          errs() << "DIR  [" << DwarfRegName(Loc.Reg) << " + " << Loc.Offset << "]";
+          break;
+        case Location::Indirect:
+          errs() << "IND  [" << DwarfRegName(Loc.Reg) << " + " << Loc.Offset << "]";
+          break;
+        default:
+          errs() << "UNKNOWN";
+      }
+      errs() << "  (size=" << Loc.Size << ")\n";
+    };
+    errs() << "[delta-main] pair #" << (I - RefPairsBegin) / 2 << (Base == Derived ? "  (base-only)" : "") << "\n";
+    PrintLoc("base   ", Base);
+    if (Base != Derived)
+      PrintLoc("derived", Derived);
 
     if (!IsTrackable(Base) || !IsTrackable(Derived))
       report_fatal_error(
