@@ -55,6 +55,7 @@ DeltaMainStackMapEncoder::collectBaseToDerived(
   size_t RefPairsBegin = NumLeadingConstants + NumDeoptArgs;
   size_t RefPairsEnd = Locs.size() - CSI.NumAllocas;
   size_t RefPairCount = RefPairsEnd - RefPairsBegin;
+  errs() << "NumAllocas =" << CSI.NumAllocas;
   if (RefPairCount % 2 != 0)
     report_fatal_error(
         "delta-main: base/derived GC pointers must come in pairs");
