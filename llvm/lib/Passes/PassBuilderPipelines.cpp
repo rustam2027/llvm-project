@@ -123,6 +123,7 @@
 #include "llvm/Transforms/Scalar/MergedLoadStoreMotion.h"
 #include "llvm/Transforms/Scalar/NewGVN.h"
 #include "llvm/Transforms/Scalar/Reassociate.h"
+#include "llvm/Transforms/Scalar/RewriteStatepointsForGC.h"
 #include "llvm/Transforms/Scalar/SCCP.h"
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Scalar/SimpleLoopUnswitch.h"
@@ -1680,6 +1681,8 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
   // Emit annotation remarks.
   addAnnotationRemarksPass(MPM);
 
+  MPM.addPass(RewriteStatepointsForGC());
+
   if (isLTOPreLink(Phase))
     addRequiredLTOPreLinkPasses(MPM);
   return MPM;
@@ -1796,6 +1799,8 @@ PassBuilder::buildThinLTOPreLinkDefaultPipeline(OptimizationLevel Level) {
   // Emit annotation remarks.
   addAnnotationRemarksPass(MPM);
 
+  MPM.addPass(RewriteStatepointsForGC());
+
   addRequiredLTOPreLinkPasses(MPM);
 
   return MPM;
@@ -1906,6 +1911,8 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
     // Emit annotation remarks.
     addAnnotationRemarksPass(MPM);
 
+    MPM.addPass(RewriteStatepointsForGC());
+
     return MPM;
   }
 
@@ -1996,6 +2003,8 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
 
     // Emit annotation remarks.
     addAnnotationRemarksPass(MPM);
+
+    MPM.addPass(RewriteStatepointsForGC());
 
     return MPM;
   }
@@ -2232,6 +2241,8 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
   // Emit annotation remarks.
   addAnnotationRemarksPass(MPM);
 
+  MPM.addPass(RewriteStatepointsForGC());
+
   return MPM;
 }
 
@@ -2351,6 +2362,8 @@ PassBuilder::buildO0DefaultPipeline(OptimizationLevel Level,
   if (EnableLoopTrapAnalysis)
     MPM.addPass(createModuleToFunctionPassAdaptor(LoopTrapAnalysisPass()));
   MPM.addPass(createModuleToFunctionPassAdaptor(AnnotationRemarksPass()));
+
+  MPM.addPass(RewriteStatepointsForGC());
 
   return MPM;
 }
