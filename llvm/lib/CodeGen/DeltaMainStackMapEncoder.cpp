@@ -14,10 +14,14 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 using namespace llvm::deltamain;
+
+#define DEBUG_TYPE "delta-main-stackmaps"
 
 using Location = StackMaps::Location;
 
@@ -53,6 +57,7 @@ DeltaMainStackMapEncoder::collectBaseToDerived(
   size_t RefPairsBegin = NumLeadingConstants + NumDeoptArgs;
   size_t RefPairsEnd = Locs.size() - CSI.NumAllocas;
   size_t RefPairCount = RefPairsEnd - RefPairsBegin;
+  LLVM_DEBUG(dbgs() << "NumAllocas =" << CSI.NumAllocas << "\n");
   if (RefPairCount % 2 != 0)
     report_fatal_error(
         "delta-main: base/derived GC pointers must come in pairs");
@@ -64,6 +69,38 @@ DeltaMainStackMapEncoder::collectBaseToDerived(
   for (size_t I = RefPairsBegin; I < RefPairsEnd; I += 2) {
     const Location &Base = Locs[I];
     const Location &Derived = Locs[I + 1];
+
+    LLVM_DEBUG({
+      auto DwarfRegName = [](uint16_t Reg) -> std::string {
+        switch (Reg) {
+          case 29: return "x29/fp";
+          case 30: return "x30/lr";
+          case 31: return "sp";
+          default: return ("x" + Twine(Reg)).str();
+        }
+      };
+      auto PrintLoc = [&](const char *Label, const Location &Loc) {
+        dbgs() << "    " << Label << ": ";
+        switch (Loc.Type) {
+          case Location::Register:
+            dbgs() << "REG  " << DwarfRegName(Loc.Reg);
+            break;
+          case Location::Direct:
+            dbgs() << "DIR  [" << DwarfRegName(Loc.Reg) << " + " << Loc.Offset << "]";
+            break;
+          case Location::Indirect:
+            dbgs() << "IND  [" << DwarfRegName(Loc.Reg) << " + " << Loc.Offset << "]";
+            break;
+          default:
+            dbgs() << "UNKNOWN";
+        }
+        dbgs() << "  (size=" << Loc.Size << ")\n";
+      };
+      dbgs() << "[delta-main] pair #" << (I - RefPairsBegin) / 2 << (Base == Derived ? "  (base-only)" : "") << "\n";
+      PrintLoc("base   ", Base);
+      if (Base != Derived)
+        PrintLoc("derived", Derived);
+    });
 
     if (!IsTrackable(Base) || !IsTrackable(Derived))
       report_fatal_error(
