@@ -8,7 +8,6 @@
 
 #include "DeltaMainStackMapEncoder.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/MC/MCContext.h"
@@ -30,10 +29,9 @@ using Location = StackMaps::Location;
 // Recovering base/derived-pointer structure from a flattened CallsiteInfo.
 //===----------------------------------------------------------------------===//
 
-DeltaMainStackMapEncoder::BaseToDerivedMap
-DeltaMainStackMapEncoder::collectBaseToDerived(
+std::set<deltamain::Location> DeltaMainStackMapEncoder::collectBases(
     const StackMaps::CallsiteInfo &CSI) const {
-  BaseToDerivedMap Base2Derived;
+  std::set<Location> Bases;
   const StackMaps::LocationVec &Locs = CSI.Locations;
 
   // StackMaps::parseStatepointOpers appends, in order: 3 meta locations
@@ -109,10 +107,7 @@ DeltaMainStackMapEncoder::collectBaseToDerived(
           "pointer pair (expected a callee-saved register or an indirect "
           "stack slot)");
 
-    if (Base == Derived)
-      Base2Derived[Base]; // Base pointer with no separately-live derived ptr.
-    else
-      Base2Derived[Base].insert(Derived);
+    Bases.insert(Base);
   }
 
   // Alloca roots are always their own base, with no separate derived
@@ -120,36 +115,28 @@ DeltaMainStackMapEncoder::collectBaseToDerived(
   // Indirect/Register -- gc.statepoint alloca operands are typically
   // Location::Direct (a frame address, not a loaded value).
   for (size_t I = RefPairsEnd; I < Locs.size(); ++I)
-    Base2Derived[Locs[I]];
+    Bases.insert(Locs[I]);
 
-  return Base2Derived;
+  return Bases;
 }
 
 void DeltaMainStackMapEncoder::populateState(
-    State &St, const BaseToDerivedMap &Base2Derived) const {
-  for (const auto &[Loc, Deriveds] : Base2Derived) {
+    State &St, const std::set<Location> &Bases) const {
+  for (const Location &Loc : Bases) {
     switch (Loc.Type) {
     case Location::Direct:
     case Location::Indirect:
       St.StackSlots.push_back(Loc);
-      for (const Location &Derived : Deriveds)
-        St.DerivedSlots.emplace_back(Loc, Derived);
       break;
 
     case Location::Register:
-      if (!EmitRegisters)
-        report_fatal_error(
-            "delta-main: found a register-typed GC root but "
-            "register-in-stackmap support is disabled in this build (see "
-            "DeltaMainStackMapEncoder.h)");
-      St.Registers.push_back(Loc);
-      for (const Location &Derived : Deriveds)
-        St.DerivedSlots.emplace_back(Loc, Derived);
-      break;
+      report_fatal_error(
+          "delta-main: found a register-typed GC root, but "
+          "register-in-stackmap support is not implemented in this port");
 
     default:
       llvm_unreachable(
-          "collectBaseToDerived only inserts Direct/Indirect/Register keys");
+          "collectBases only inserts Direct/Indirect/Register keys");
     }
   }
 }
@@ -171,8 +158,8 @@ FunctionState DeltaMainStackMapEncoder::buildFunctionState(
     State NewState;
     NewState.Pc = CSI.CSOffsetExpr;
 
-    BaseToDerivedMap Base2Derived = collectBaseToDerived(CSI);
-    populateState(NewState, Base2Derived);
+    std::set<Location> Bases = collectBases(CSI);
+    populateState(NewState, Bases);
 
     Func.States.push_back(std::move(NewState));
   }
@@ -183,8 +170,7 @@ FunctionState DeltaMainStackMapEncoder::buildFunctionState(
 void FunctionState::assignSlotIndices(int64_t FPtoSPDelta) {
   int64_t MaxOffset = INT64_MIN;
   auto NoteOffset = [&MaxOffset](const Location &Loc) {
-    if (Loc.Type != Location::Register)
-      MaxOffset = std::max<int64_t>(Loc.Offset, MaxOffset);
+    MaxOffset = std::max<int64_t>(Loc.Offset, MaxOffset);
   };
 
   auto LocationConverter = [FPtoSPDelta](Location& Loc) {
@@ -204,13 +190,6 @@ void FunctionState::assignSlotIndices(int64_t FPtoSPDelta) {
       LocationConverter(Slot);
       NoteOffset(Slot);
     }
-    for (auto &Derived : St.DerivedSlots) {
-      LocationConverter(Derived.first);
-      NoteOffset(Derived.first);
-
-      LocationConverter(Derived.second);
-      NoteOffset(Derived.second);
-    }
   }
 
   if (MaxOffset == INT64_MIN) {
@@ -220,9 +199,6 @@ void FunctionState::assignSlotIndices(int64_t FPtoSPDelta) {
   BaseOffset = MaxOffset;
 
   auto AssignIndex = [MaxOffset](Location &Loc) {
-    if (Loc.Type == Location::Register)
-      return;
-
     int64_t SlotDelta = MaxOffset - Loc.Offset;
     if (SlotDelta % 8 != 0)
       report_fatal_error("delta-main: stack slot offset is not 8-byte "
@@ -239,10 +215,6 @@ void FunctionState::assignSlotIndices(int64_t FPtoSPDelta) {
   for (State &St : States) {
     for (Location &Slot : St.StackSlots)
       AssignIndex(Slot);
-    for (auto &Derived : St.DerivedSlots) {
-      AssignIndex(Derived.first);
-      AssignIndex(Derived.second);
-    }
   }
 }
 
@@ -256,34 +228,13 @@ int64_t DeltaMainStackMapEncoder::enumerate(const Location &Loc) const {
   case Location::Indirect:
     return Loc.Reg; // Set by FunctionState::assignSlotIndices.
 
-  case Location::Register: {
-    // AArch64-specific renumbering: x19-x27 (the 9 general-purpose
-    // callee-saved registers) become 0-8 so they pack densely at the start
-    // of the register bit vector; x28 keeps its number, and registers
-    // below x19 shift up by 9 to keep the mapping a bijection over
-    // [0, 29). See the class comment: this port is AArch64-only.
-    unsigned Idx = Loc.Reg;
-    if (Idx >= 19 && Idx < 28)
-      return Idx - 19;
-    if (Idx < 19)
-      return Idx + 9;
-    return Idx;
-  }
+  case Location::Register:
+    llvm_unreachable("enumerate: register-typed GC roots are not supported "
+                     "by this port (see "
+                     "DeltaMainStackMapEncoder::populateState)");
 
   default:
     llvm_unreachable("enumerate: unsupported Location type");
-  }
-}
-
-int64_t DeltaMainStackMapEncoder::signedEnumerate(const Location &Loc) const {
-  switch (Loc.Type) {
-  case Location::Direct:
-  case Location::Indirect:
-    return -enumerate(Loc) - 1;
-  case Location::Register:
-    return enumerate(Loc);
-  default:
-    llvm_unreachable("signedEnumerate: unsupported Location type");
   }
 }
 
@@ -306,13 +257,7 @@ DeltaMainStackMapEncoder::getLocationMask(ArrayRef<Location> Locs) const {
 
 Delta DeltaMainStackMapEncoder::computeDelta(const State &St) const {
   Delta D;
-  D.Regs = getLocationMask(St.Registers);
   D.StackSlots = getLocationMask(St.StackSlots);
-
-  for (const auto &Derived : St.DerivedSlots)
-    D.DerivedSlots.emplace(signedEnumerate(Derived.first),
-                           signedEnumerate(Derived.second));
-
   return D;
 }
 
@@ -322,15 +267,8 @@ Delta DeltaMainStackMapEncoder::computeDelta(const State &Base,
   Delta OtherDelta = computeDelta(Other);
 
   Delta D;
-  D.Regs = BaseDelta.Regs;
-  D.Regs ^= OtherDelta.Regs;
-
   D.StackSlots = BaseDelta.StackSlots;
   D.StackSlots ^= OtherDelta.StackSlots;
-
-  D.DerivedSlots = set_difference(BaseDelta.DerivedSlots, OtherDelta.DerivedSlots);
-  set_union(D.DerivedSlots,
-           set_difference(OtherDelta.DerivedSlots, BaseDelta.DerivedSlots));
 
   return D;
 }
@@ -388,7 +326,7 @@ void DeltaMainStackMapEncoder::emit(MCStreamer &OS,
   MCSymbol *StackMapsSymbol = Ctx.getOrCreateSymbol("__LLVM_StackMaps");
 
   // Emit magic to verify in runtime.
-  OS.emitInt8(DeltaMainVersion << 4 | ((EmitRegisters) ? 0b1 : 0b0) | ((LazyEnabled) ? 0b10 : 0b00));
+  OS.emitInt8(DeltaMainVersion << 4 | ((LazyEnabled) ? 0b10 : 0b00));
 
   OS.emitULEB128IntValue(Map.Funcs.size());
 
@@ -404,7 +342,7 @@ void DeltaMainStackMapEncoder::emit(MCStreamer &OS,
     OS.emitSLEB128IntValue(Func.BaseOffset);
     OS.emitULEB128IntValue(Func.StackSize);
 
-    Func.Base.emit(OS, EmitRegisters);
+    Func.Base.emit(OS);
 
     OS.emitULEB128IntValue(Func.PcToDelta.size());
     for (const auto &PcDelta : Func.PcToDelta) {
@@ -413,6 +351,6 @@ void DeltaMainStackMapEncoder::emit(MCStreamer &OS,
     }
 
     for (const Delta &D : Func.Deltas)
-      D.emit(OS, EmitRegisters);
+      D.emit(OS);
   }
 }

@@ -47,19 +47,8 @@ struct State {
   /// Expression for this call site's offset from the function's start.
   const MCExpr *Pc = nullptr;
 
-  /// Live callee-saved registers holding GC roots, in enumerated order.
-  /// Always empty in this initial port: capturing register liveness
-  /// requires StackMaps to record callee-saved-register spill slots per
-  /// function, which is deferred (see KotlinNativeGCPrinter.cpp).
-  std::vector<Location> Registers;
-
   /// Live stack slots holding GC roots.
   std::vector<Location> StackSlots;
-
-  /// (location, base) pairs: `location` is a derived pointer computed from
-  /// the root `base`. `base == location` marks a location that is itself a
-  /// base pointer with no separately-live derived pointer at this site.
-  std::vector<std::pair<Location, Location>> DerivedSlots;
 };
 
 /// All States recorded for one function, before delta-compression.
@@ -77,36 +66,32 @@ struct FunctionState {
   void assignSlotIndices(int64_t FPtoSPDelta);
 };
 
+/// NOTE: this port intentionally does not track callee-saved-register
+/// liveness or derived-pointer/relocation links (see State/Delta below).
+/// Register-typed GC roots are provably unreachable in this pipeline, and
+/// derived-pointer tracking only matters for relocating pointers after a
+/// moving/compacting GC, which Kotlin/Native does not have. Reintroducing
+/// derived-pointer tracking would be required if a compacting GC were ever
+/// added later.
+///
 /// The live-location set of one call site, encoded relative to its
-/// function's base state. Bit positions and DerivedSlots keys/values are
-/// produced by DeltaMainStackMapEncoder::enumerate() /
-/// DeltaMainStackMapEncoder::signedEnumerate().
+/// function's base state. Bit positions are produced by
+/// DeltaMainStackMapEncoder::enumerate().
 struct Delta {
-  BitVector Regs;
   BitVector StackSlots;
-
-  /// Base/derived-pointer links, in signed-enumerated form:
-  /// signedEnumerate(base) -> signedEnumerate(location). See
-  /// DeltaMainStackMapEncoder::signedEnumerate for the sign convention.
-  std::set<std::pair<int64_t, int64_t>> DerivedSlots;
 
   Delta() = default;
 
   friend bool operator==(const Delta &LHS, const Delta &RHS) {
-    return std::tie(LHS.Regs, LHS.StackSlots, LHS.DerivedSlots) ==
-           std::tie(RHS.Regs, RHS.StackSlots, RHS.DerivedSlots);
+    return std::tie(LHS.StackSlots) == std::tie(RHS.StackSlots);
   }
 
   friend bool operator<(const Delta &LHS, const Delta &RHS) {
-    return std::tie(LHS.Regs, LHS.StackSlots, LHS.DerivedSlots) <
-           std::tie(RHS.Regs, RHS.StackSlots, RHS.DerivedSlots);
+    return std::tie(LHS.StackSlots) < std::tie(RHS.StackSlots);
   }
 
-  /// Serialize this Delta as: (if \p EmitRegisters) a ULEB128-encoded
-  /// register bit vector; a ULEB128-encoded stack-slot bit vector; the
-  /// derived-pointer link count; then each (base, location) pair as two
-  /// SLEB128 values.
-  void emit(MCStreamer &OS, bool EmitRegisters) const;
+  /// Serialize this Delta as a ULEB128-encoded stack-slot bit vector.
+  void emit(MCStreamer &OS) const;
 };
 
 /// One function's complete delta-main record: its base state plus the

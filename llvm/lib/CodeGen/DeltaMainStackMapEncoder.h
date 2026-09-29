@@ -19,11 +19,13 @@
 //
 // Current limitations of this initial port (see class comment below):
 //  - AArch64 only.
-//  - Register-liveness tracking (EmitRegisters=true) is not wired up to a
-//    location source yet; StackMaps does not currently record which
-//    callee-saved registers are live at a callsite the way it records
-//    stack slots. Passing EmitRegisters=true will report_fatal_error as
-//    soon as a register-typed GC root is encountered.
+//  - Register-liveness tracking is not supported at all: StackMaps does not
+//    currently record which callee-saved registers are live at a callsite
+//    the way it records stack slots. This will report_fatal_error as soon
+//    as a register-typed GC root is encountered.
+//  - Derived-pointer/relocation tracking is not implemented (this port only
+//    ever targets non-moving/mark-sweep GC variants; see the rationale
+//    comment in DeltaMainStackMap.h).
 //  - No lazy/offset-section support: every function's delta-main record is
 //    emitted unconditionally into the stackmap section, mirroring how the
 //    default StackMaps::serializeToStackMapSection() behaves today.
@@ -37,7 +39,6 @@
 #include "llvm/ADT/BitVector.h"
 #include "llvm/CodeGen/DeltaMainStackMap.h"
 #include "llvm/CodeGen/StackMaps.h"
-#include <map>
 #include <set>
 
 namespace llvm {
@@ -47,19 +48,16 @@ class MCStreamer;
 /// Builds a deltamain::EncodedStackMap from a StackMaps object and
 /// serializes it to the delta-main wire format.
 ///
-/// This class is AArch64-only: enumerate()'s register renumbering is not
-/// target-independent (see its doc comment). Callers must verify the
-/// target triple before use; the encoder itself does not check it, since
-/// doing so requires a Triple/TargetMachine that KotlinNativeGCPrinter
-/// already has available via AsmPrinter.
+/// This class is AArch64-only: FunctionState::assignSlotIndices hardcodes
+/// AArch64 DWARF register numbers for the frame/stack pointer (see its
+/// LocationConverter). Callers must verify the target triple before use;
+/// the encoder itself does not check it, since doing so requires a
+/// Triple/TargetMachine that KotlinNativeGCPrinter already has available
+/// via AsmPrinter.
 class DeltaMainStackMapEncoder {
 public:
-  /// \param EmitRegisters whether to encode callee-saved-register liveness
-  /// in addition to stack-slot liveness. See the file comment: this is not
-  /// yet backed by real register-liveness data and will fail loudly if a
-  /// register-typed root is actually encountered while enabled.
-  explicit DeltaMainStackMapEncoder(int DeltaMainVersion, bool EmitRegisters, bool LazyEnabled)
-      : DeltaMainVersion(DeltaMainVersion), EmitRegisters(EmitRegisters), LazyEnabled(LazyEnabled) {}
+  explicit DeltaMainStackMapEncoder(int DeltaMainVersion, bool LazyEnabled)
+      : DeltaMainVersion(DeltaMainVersion), LazyEnabled(LazyEnabled) {}
 
   /// Build the delta-main-encoded form of every function in \p SM that has
   /// at least one recorded, GC-relevant call site.
@@ -78,23 +76,18 @@ public:
 
 private:
   int DeltaMainVersion;
-  bool EmitRegisters;
   bool LazyEnabled;
 
-  using BaseToDerivedMap =
-      std::map<deltamain::Location, std::set<deltamain::Location>>;
+  /// Recover the set of unique base GC-pointer locations, and the alloca
+  /// roots, that StackMaps::parseStatepointOpers flattened into
+  /// \p CSI.Locations. Derived pointers are discarded: this port only
+  /// tracks base pointers (see DeltaMainStackMap.h).
+  std::set<deltamain::Location>
+  collectBases(const StackMaps::CallsiteInfo &CSI) const;
 
-  /// Recover the base/derived GC-pointer pairs, and the alloca roots, that
-  /// StackMaps::parseStatepointOpers flattened into \p CSI.Locations. A key
-  /// with an empty value set denotes a location that is itself a root with
-  /// no separately-live derived pointer (either a lone base pointer, or an
-  /// alloca root).
-  BaseToDerivedMap collectBaseToDerived(const StackMaps::CallsiteInfo &CSI) const;
-
-  /// Classify every (base, derived) pair from \p Base2Derived into
-  /// \p State's Registers/StackSlots/DerivedSlots.
+  /// Classify every location in \p Bases into \p State's StackSlots.
   void populateState(deltamain::State &State,
-                     const BaseToDerivedMap &Base2Derived) const;
+                     const std::set<deltamain::Location> &Bases) const;
 
   /// Build the (not yet delta-compressed) per-callsite State list for one
   /// function. \p StartIdx is the index of this function's first record in
@@ -122,20 +115,11 @@ private:
   /// \p Locs.
   BitVector getLocationMask(ArrayRef<deltamain::Location> Locs) const;
 
-  /// Maps a Location to a dense, non-negative bit-vector index.
-  ///
-  /// For AArch64 callee-saved registers (x19-x28), remaps x19-x27 to 0-8
-  /// (so the 9 general-purpose callee-saved registers pack densely at the
-  /// start of the register bit vector) and leaves x28 and registers below
-  /// x19 shifted to keep the mapping a bijection. This numbering is
-  /// AArch64-specific; see the class comment.
+  /// Maps a Direct/Indirect stack-slot Location to a dense, non-negative
+  /// bit-vector index (its FunctionState::assignSlotIndices-assigned slot
+  /// index). Register-typed Locations are not supported: see
+  /// DeltaMainStackMapEncoder::populateState.
   int64_t enumerate(const deltamain::Location &Loc) const;
-
-  /// Like enumerate(), but returns a value that also encodes whether \p Loc
-  /// is a stack slot or a register, for use as a DerivedSlots key/value:
-  /// stack slots map to negative values (-enumerate(Loc) - 1), registers to
-  /// their non-negative enumerate(Loc).
-  int64_t signedEnumerate(const deltamain::Location &Loc) const;
 };
 
 } // end namespace llvm

@@ -13,19 +13,6 @@
 using namespace llvm;
 using namespace llvm::deltamain;
 
-void Delta::emit(MCStreamer &OS, bool EmitRegisters) const {
-  if (EmitRegisters) {
-    OS.emitULEB128BitVector(Regs);
-  } else if (!Regs.empty()) {
-    report_fatal_error("delta-main: register bit vector is non-empty but "
-                       "register-in-stackmap support is disabled");
-  }
-
+void Delta::emit(MCStreamer &OS) const {
   OS.emitULEB128BitVector(StackSlots);
-
-  OS.emitULEB128IntValue(DerivedSlots.size());
-  for (const auto &Derived : DerivedSlots) {
-    OS.emitSLEB128IntValue(Derived.first);
-    OS.emitSLEB128IntValue(Derived.second);
-  }
 }
