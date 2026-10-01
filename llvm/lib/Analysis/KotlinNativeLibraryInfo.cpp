@@ -30,7 +30,10 @@ static StringLiteral const KotlinNativeLibFuncNames[NumKotlinNativeLibFuncs] =
 // signature check.
 enum KotlinNativeFuncArgTypeID : char {
   Void = 0, // Must be zero.
-  Bool,     // 8 bits.
+  Bool,     // A C++ bool parameter: Clang's ABI lowering represents these as
+            // i1 (with a zeroext attribute) in a function's parameter list,
+            // not i8 (i8 does show up for bool in other contexts, e.g. struct
+            // fields or arrays, just not here).
   Int32,
   Long,     // size_t-like; 32 or 64 bits.
   Ptr,      // Any pointer type.
@@ -58,7 +61,7 @@ static bool matchType(KotlinNativeFuncArgTypeID ArgTy, const Type *Ty) {
   case Void:
     return Ty->isVoidTy();
   case Bool:
-    return Ty->isIntegerTy(8);
+    return Ty->isIntegerTy(1) || Ty->isIntegerTy(8);
   case Int32:
     return Ty->isIntegerTy(32);
   case Long:
