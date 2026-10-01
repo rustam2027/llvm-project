@@ -36,6 +36,8 @@ enum KotlinNativeFuncArgTypeID : char {
   Ptr,      // Any pointer type.
   Struct,   // Any struct type (used for std_support::span<char> by value).
   Ellip,    // The ellipsis (...).
+  Any,      // Matches any type, including void; used for return types that
+            // may be optimized away (e.g. dead-return-value elimination).
 };
 
 typedef std::array<KotlinNativeFuncArgTypeID, 8> KotlinNativeFuncProtoTy;
@@ -63,6 +65,8 @@ static bool matchType(KotlinNativeFuncArgTypeID ArgTy, const Type *Ty) {
     return Ty->isPointerTy();
   case Struct:
     return Ty->isStructTy();
+  case Any:
+    return true;
   default:
     break;
   }

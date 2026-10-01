@@ -40,7 +40,7 @@ KNLI_DEFINE_SIG_INTERNAL(Void, Ptr, Ellip)
 /// std_support::span<char> kotlin::FormatToSpan(std_support::span<char> buffer, const char* format, ...) noexcept;
 KNLI_DEFINE_ENUM_INTERNAL(kotlin_native_format_to_span_struct_ptr_ellip)
 KNLI_DEFINE_STRING_INTERNAL("_ZN6kotlin12FormatToSpanENS_11std_support4spanIcLm18446744073709551615EEEPKcz")
-KNLI_DEFINE_SIG_INTERNAL(Struct, Struct, Ptr, Ellip)
+KNLI_DEFINE_SIG_INTERNAL(Any, Struct, Ptr, Ellip)
 
 /// void kotlin::logging::Log(kotlin::logging::Level level, std::initializer_list<kotlin::logging::Tag> tags, const char* format, ...) noexcept;
 KNLI_DEFINE_ENUM_INTERNAL(kotlin_native_logging_log_int_struct_ptr_ellip)
@@ -60,7 +60,7 @@ KNLI_DEFINE_SIG_INTERNAL(Void, Bool, Ptr, Ptr, Ellip)
 /// std_support::span<char> kotlin::snprintf_with_addr(std_support::span<char> buffer, size_t frame, const void* addr, bool is_inline, const char* format, ...);
 KNLI_DEFINE_ENUM_INTERNAL(kotlin_native_snprintf_with_addr_struct_long_ptr_bool_ptr_ellip)
 KNLI_DEFINE_STRING_INTERNAL("_ZN6kotlin18snprintf_with_addrENS_11std_support4spanIcLm18446744073709551615EEEmPKvbPKcz")
-KNLI_DEFINE_SIG_INTERNAL(Struct, Struct, Long, Ptr, Bool, Ptr, Ellip)
+KNLI_DEFINE_SIG_INTERNAL(Any, Struct, Long, Ptr, Bool, Ptr, Ellip)
 
 /// RUNTIME_NORETURN void kotlin::throwReadingRandomBytesFailed(const char* format, ...);
 KNLI_DEFINE_ENUM_INTERNAL(kotlin_native_throw_reading_random_bytes_failed_ptr_ellip)
