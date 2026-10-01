@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Utils/Local.h"
+#include <cstdio> // TEMPORARY: for KNLI debug tracing, see callsGCLeafFunction.
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseMapInfo.h"
@@ -3655,8 +3656,25 @@ bool llvm::callsGCLeafFunction(const CallBase *Call,
   // Kotlin objects, allocate, or take a safepoint.
   const Function *Caller = Call->getParent()->getParent();
   if (Caller->hasGC() && Caller->getGC() == "kotlin-native") {
+    // TEMPORARY diagnostic instrumentation -- remove once confirmed working.
+    // Deliberately plain C stdio to a fixed file, not errs()/outs(): when
+    // this runs inside the Kotlin/Native compiler driver, Kotlin appears to
+    // capture/suppress LLVM's normal diagnostic streams, so errs() output
+    // never becomes visible there even when this code genuinely executes.
+    if (FILE *KnliF = std::fopen("/tmp/knli-debug.log", "a")) {
+      std::fprintf(KnliF, "[KNLI-DEBUG] callsGCLeafFunction: caller=%s gc=%s callee=%s\n",
+                   Caller->getName().str().c_str(), Caller->getGC().c_str(),
+                   Call->getCalledFunction() ? Call->getCalledFunction()->getName().str().c_str()
+                                              : "<indirect/null>");
+      std::fclose(KnliF);
+    }
     KotlinNativeLibFunc KF;
-    if (getKotlinNativeLibFunc(*Call, KF))
+    bool Matched = getKotlinNativeLibFunc(*Call, KF);
+    if (FILE *KnliF = std::fopen("/tmp/knli-debug.log", "a")) {
+      std::fprintf(KnliF, "[KNLI-DEBUG]   -> registry match: %d\n", (int)Matched);
+      std::fclose(KnliF);
+    }
+    if (Matched)
       return true;
   }
 

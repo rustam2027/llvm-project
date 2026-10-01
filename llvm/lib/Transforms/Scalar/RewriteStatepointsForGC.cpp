@@ -13,6 +13,7 @@
 
 #include "llvm/Transforms/Scalar/RewriteStatepointsForGC.h"
 
+#include <cstdio> // TEMPORARY: for KNLI debug tracing in runOnFunction.
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -3060,6 +3061,43 @@ bool RewriteStatepointsForGC::runOnFunction(Function &F, DominatorTree &DT,
   assert(!F.isDeclaration() && !F.empty() &&
          "need function body to rewrite statepoints in");
   assert(shouldRewriteStatepointsIn(F) && "mismatch in rewrite decision");
+
+  // TEMPORARY diagnostic instrumentation -- remove once confirmed working.
+  // Plain C stdio to a fixed file (not errs()/outs()): see the identical
+  // rationale in KotlinNativeLibraryInfo.cpp -- Kotlin's compiler driver
+  // appears to swallow LLVM's normal diagnostic streams.
+  if (F.getName().contains("getStackTraceStrings") ||
+      F.getName().contains("snprintf_with_addr")) {
+    if (FILE *Fp = std::fopen("/tmp/knli-debug.log", "a")) {
+      unsigned NumInsts = 0, NumCalls = 0, NumStatepoints = 0;
+      bool HasRawSnprintf = false, HasWrappedSnprintf = false;
+      for (Instruction &I : instructions(F)) {
+        ++NumInsts;
+        if (auto *CB = dyn_cast<CallBase>(&I)) {
+          ++NumCalls;
+          if (isa<GCStatepointInst>(CB)) {
+            ++NumStatepoints;
+            if (auto *GCS = dyn_cast<GCStatepointInst>(CB)) {
+              if (Function *Target = GCS->getActualCalledFunction()) {
+                if (Target->getName().contains("snprintf_with_addr"))
+                  HasWrappedSnprintf = true;
+              }
+            }
+          } else if (Function *Callee = CB->getCalledFunction()) {
+            if (Callee->getName().contains("snprintf_with_addr"))
+              HasRawSnprintf = true;
+          }
+        }
+      }
+      std::fprintf(Fp,
+                   "[KNLI-RUNONFN] runOnFunction ENTER name=%s NumInsts=%u "
+                   "NumCalls=%u NumStatepoints=%u HasRawSnprintfCall=%d "
+                   "HasWrappedSnprintfStatepoint=%d\n",
+                   F.getName().str().c_str(), NumInsts, NumCalls,
+                   NumStatepoints, (int)HasRawSnprintf, (int)HasWrappedSnprintf);
+      std::fclose(Fp);
+    }
+  }
 
   auto NeedsRewrite = [&TLI](Instruction &I) {
     if (const auto *Call = dyn_cast<CallBase>(&I)) {

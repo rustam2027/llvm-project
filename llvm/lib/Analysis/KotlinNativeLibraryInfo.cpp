@@ -14,8 +14,35 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Function.h"
+#include "llvm/Support/raw_ostream.h"
 #include <array>
+#include <cstdio>
 using namespace llvm;
+
+// TEMPORARY diagnostic instrumentation -- remove once the registry is
+// confirmed working end-to-end.
+//
+// Deliberately NOT using llvm::errs()/outs(): when this pass runs inside the
+// Kotlin/Native compiler driver (as opposed to the standalone `opt` tool),
+// Kotlin appears to capture/suppress whatever LLVM writes to its normal
+// diagnostic streams, so nothing from errs() ever becomes visible even when
+// the code path genuinely runs. Writing straight to a fixed file with plain
+// C stdio sidesteps that entirely -- it doesn't go through any LLVM stream
+// object Kotlin could be intercepting, and doesn't depend on process
+// stdout/stderr being forwarded anywhere.
+static void knliTraceImpl(const std::string &Msg) {
+  if (FILE *F = std::fopen("/tmp/knli-debug.log", "a")) {
+    std::fprintf(F, "[KNLI-DEBUG] %s\n", Msg.c_str());
+    std::fclose(F);
+  }
+}
+#define KNLI_TRACE(X)                                                        \
+  do {                                                                       \
+    std::string KnliTraceMsg;                                                \
+    raw_string_ostream KnliTraceOS(KnliTraceMsg);                            \
+    KnliTraceOS << X;                                                        \
+    knliTraceImpl(KnliTraceMsg);                                             \
+  } while (0)
 
 static StringLiteral const KotlinNativeLibFuncNames[NumKotlinNativeLibFuncs] =
     {
@@ -86,17 +113,30 @@ static bool isValidProtoForKotlinNativeLibFunc(const FunctionType &FTy,
   unsigned Idx = 0;
   Type *Ty = FTy.getReturnType();
   const auto &ProtoTypes = KotlinNativeSignatures[F];
+  KNLI_TRACE("  isValidProtoForKotlinNativeLibFunc: NumParams=" << NumParams
+             << " isVarArg=" << FTy.isFunctionVarArg());
   for (auto TyID : ProtoTypes) {
+    {
+      std::string TyStr;
+      raw_string_ostream OS(TyStr);
+      if (Ty) Ty->print(OS); else OS << "<null>";
+      KNLI_TRACE("    Idx=" << Idx << " TyID=" << (int)TyID << " actualTy=" << TyStr);
+    }
+
     if (Idx && TyID == Void)
       break;
 
     if (TyID == Ellip) {
       assert(Idx == ProtoTypes.size() - 1 || ProtoTypes[Idx + 1] == Void);
-      return FTy.isFunctionVarArg();
+      bool R = FTy.isFunctionVarArg();
+      KNLI_TRACE("    -> Ellip reached, isFunctionVarArg=" << R);
+      return R;
     }
 
-    if (!Ty || !matchType(TyID, Ty))
+    if (!Ty || !matchType(TyID, Ty)) {
+      KNLI_TRACE("    -> matchType FAILED at Idx=" << Idx);
       return false;
+    }
 
     if (Idx == NumParams) {
       Ty = nullptr;
@@ -107,7 +147,9 @@ static bool isValidProtoForKotlinNativeLibFunc(const FunctionType &FTy,
     Ty = FTy.getParamType(Idx++);
   }
 
-  return Idx == NumParams + 1 && !FTy.isFunctionVarArg();
+  bool R = Idx == NumParams + 1 && !FTy.isFunctionVarArg();
+  KNLI_TRACE("    -> loop ended without Ellip, result=" << R);
+  return R;
 }
 
 static DenseMap<StringRef, KotlinNativeLibFunc> buildIndexMap() {
@@ -138,13 +180,23 @@ bool llvm::getKotlinNativeLibFunc(const Function &FDecl,
   if (FDecl.isIntrinsic())
     return false;
 
-  if (!getKotlinNativeLibFunc(FDecl.getName(), F))
+  if (!getKotlinNativeLibFunc(FDecl.getName(), F)) {
+    KNLI_TRACE("getKotlinNativeLibFunc(Function): name '" << FDecl.getName()
+               << "' not in registry");
     return false;
+  }
 
-  return isValidProtoForKotlinNativeLibFunc(*FDecl.getFunctionType(), F);
+  bool R = isValidProtoForKotlinNativeLibFunc(*FDecl.getFunctionType(), F);
+  KNLI_TRACE("getKotlinNativeLibFunc(Function): name '" << FDecl.getName()
+             << "' IS in registry (enum=" << (unsigned)F << "), proto check -> "
+             << R);
+  return R;
 }
 
 bool llvm::getKotlinNativeLibFunc(const CallBase &CB, KotlinNativeLibFunc &F) {
+  const Function *Callee = CB.getCalledFunction();
+  KNLI_TRACE("getKotlinNativeLibFunc(CallBase): isNoBuiltin=" << CB.isNoBuiltin()
+             << " callee=" << (Callee ? Callee->getName() : "<indirect/null>"));
   return !CB.isNoBuiltin() && CB.getCalledFunction() &&
          getKotlinNativeLibFunc(*CB.getCalledFunction(), F);
 }
