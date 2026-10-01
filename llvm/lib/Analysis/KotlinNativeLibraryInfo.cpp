@@ -34,7 +34,9 @@ enum KotlinNativeFuncArgTypeID : char {
   Int32,
   Long,     // size_t-like; 32 or 64 bits.
   Ptr,      // Any pointer type.
-  Struct,   // Any struct type (used for std_support::span<char> by value).
+  Struct,   // Any struct type, or the array-coerced form Clang's ABI
+            // lowering produces for small by-value aggregates (e.g. the
+            // [2 x i64] it emits for std_support::span<char> by value).
   Ellip,    // The ellipsis (...).
   Any,      // Matches any type, including void; used for return types that
             // may be optimized away (e.g. dead-return-value elimination).
@@ -64,7 +66,7 @@ static bool matchType(KotlinNativeFuncArgTypeID ArgTy, const Type *Ty) {
   case Ptr:
     return Ty->isPointerTy();
   case Struct:
-    return Ty->isStructTy();
+    return Ty->isStructTy() || Ty->isArrayTy();
   case Any:
     return true;
   default:
