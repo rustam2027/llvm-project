@@ -1556,8 +1556,10 @@ static void CreateGCRelocates(ArrayRef<Value *> LiveVariables,
 
   for (unsigned i = 0; i < LiveVariables.size(); i++) {
     // No need to relocate allocas (live references in stack), they can't be moved by gc.
-    if (isa<AllocaInst>(LiveVariables[i]))
+    if (auto* AI = dyn_cast<AllocaInst>(LiveVariables[i])) {
+      assert(AI->isStaticAlloca() && "A dynamic alloca can not be a GC root");
       continue;
+    }
 
     // Generate the gc.relocate call and save the result
     Value *BaseIdx = Builder.getInt32(FindIndex(LiveVariables, BasePtrs[i]));
