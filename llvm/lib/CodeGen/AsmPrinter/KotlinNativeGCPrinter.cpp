@@ -56,7 +56,7 @@ bool KotlinNativeGCPrinter::emitStackMaps(StackMaps &SM, AsmPrinter &AP) {
 
   // Register-liveness tracking is not supported at all.
   // (see DeltaMainStackMapEncoder.h)
-  const int DeltaMainVersion = 4;
+  const int DeltaMainVersion = 5;
   const bool LazyEnabled = false;
 
   DeltaMainStackMapEncoder Encoder(DeltaMainVersion, LazyEnabled);

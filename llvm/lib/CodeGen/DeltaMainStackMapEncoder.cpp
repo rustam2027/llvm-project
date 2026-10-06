@@ -342,7 +342,7 @@ void DeltaMainStackMapEncoder::emit(MCStreamer &OS,
   MCSymbol *StackMapsSymbol = Ctx.getOrCreateSymbol("__LLVM_StackMaps");
 
   // Emit magic to verify in runtime.
-  OS.emitInt8(DeltaMainVersion << 5 | ((LazyEnabled) ? 0b10 : 0b00));
+  OS.emitInt8(DeltaMainVersion << 4 | ((LazyEnabled) ? 0b10 : 0b00));
 
   OS.emitULEB128IntValue(Map.Funcs.size());
 
