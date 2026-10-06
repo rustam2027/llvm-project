@@ -598,6 +598,12 @@ static Value *findBaseDefiningValue(Value *I, DefiningValueMapTy &Cache,
     return I;
   }
 
+  if (isa<AllocaInst>(I)) {
+    Cache[I] = I;
+    setKnownBase(I, /* IsKnownBase */true, KnownBases);
+    return I;
+  }
+
   // We should never see an insert vector since that would require we be
   // tracing back a struct value not a pointer value.
   assert(!isa<InsertValueInst>(I) &&
