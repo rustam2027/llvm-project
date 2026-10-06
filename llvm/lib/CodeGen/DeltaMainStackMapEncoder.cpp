@@ -62,7 +62,8 @@ std::set<deltamain::Location> DeltaMainStackMapEncoder::collectBases(
         "delta-main: base/derived GC pointers must come in pairs");
 
   auto IsTrackable = [](const Location &Loc) {
-    return Loc.Type == Location::Indirect || Loc.Type == Location::Register;
+    return Loc.Type == Location::Indirect
+           || Loc.Type == Location::Direct;
   };
 
   for (size_t I = RefPairsBegin; I < RefPairsEnd; I += 2) {
@@ -104,7 +105,7 @@ std::set<deltamain::Location> DeltaMainStackMapEncoder::collectBases(
     if (!IsTrackable(Base) || !IsTrackable(Derived))
       report_fatal_error(
           "delta-main: unsupported location kind in a base/derived GC "
-          "pointer pair (expected a callee-saved register or an indirect "
+          "pointer pair (expected an indirect or a direct "
           "stack slot)");
 
     Bases.insert(Base);
@@ -125,11 +126,11 @@ void DeltaMainStackMapEncoder::populateState(
   for (const Location &Loc : Bases) {
     switch (Loc.Type) {
     case Location::Direct:
-      report_fatal_error(
-          "delta-main: found a direct-typed GC root, but "
-          "directs-in-stackmap are not supported");
+      St.DirectSlots.push_back(Loc);
+      break;
+
     case Location::Indirect:
-      St.StackSlots.push_back(Loc);
+      St.IndirectSlots.push_back(Loc);
       break;
 
     case Location::Register:
@@ -138,8 +139,7 @@ void DeltaMainStackMapEncoder::populateState(
           "registers-in-stackmap are not supported");
 
     default:
-      llvm_unreachable(
-          "collectBases only inserts Direct/Indirect/Register keys");
+      llvm_unreachable("collectBases only inserts Direct/Indirect/Register keys");
     }
   }
 }
@@ -181,7 +181,7 @@ void FunctionState::assignSlotIndices(int64_t FPtoSPDelta) {
   };
 
   auto LocationConverter = [FPtoSPDelta](Location& Loc) {
-    if (Loc.Type != StackMaps::Location::Indirect) {
+    if (Loc.Type == StackMaps::Location::Register) {
       return;
     }
 
@@ -196,7 +196,12 @@ void FunctionState::assignSlotIndices(int64_t FPtoSPDelta) {
   };
 
   for (State &St : States) {
-    for (Location &Slot : St.StackSlots) {
+    for (Location &Slot : St.IndirectSlots) {
+      LocationConverter(Slot);
+      NoteOffset(Slot);
+    }
+
+    for (Location &Slot : St.DirectSlots) {
       LocationConverter(Slot);
       NoteOffset(Slot);
     }
@@ -223,7 +228,10 @@ void FunctionState::assignSlotIndices(int64_t FPtoSPDelta) {
   };
 
   for (State &St : States) {
-    for (Location &Slot : St.StackSlots)
+    for (Location &Slot : St.IndirectSlots)
+      AssignIndex(Slot);
+
+    for (Location &Slot : St.DirectSlots)
       AssignIndex(Slot);
   }
 }
@@ -267,7 +275,8 @@ DeltaMainStackMapEncoder::getLocationMask(ArrayRef<Location> Locs) const {
 
 Delta DeltaMainStackMapEncoder::computeDelta(const State &St) const {
   Delta D;
-  D.StackSlots = getLocationMask(St.StackSlots);
+  D.IndirectSlots = getLocationMask(St.IndirectSlots);
+  D.DirectSlots = getLocationMask(St.DirectSlots);
   return D;
 }
 
@@ -277,8 +286,11 @@ Delta DeltaMainStackMapEncoder::computeDelta(const State &Base,
   Delta OtherDelta = computeDelta(Other);
 
   Delta D;
-  D.StackSlots = BaseDelta.StackSlots;
-  D.StackSlots ^= OtherDelta.StackSlots;
+  D.IndirectSlots = BaseDelta.IndirectSlots;
+  D.IndirectSlots ^= OtherDelta.IndirectSlots;
+
+  D.DirectSlots = BaseDelta.DirectSlots;
+  D.DirectSlots ^= OtherDelta.DirectSlots;
 
   return D;
 }

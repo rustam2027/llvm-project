@@ -17,8 +17,6 @@
 ; RUN: not --crash llc -mtriple=arm64-apple-macosx %t/overaligned-alloca.ll -o /dev/null 2>&1 | FileCheck %t/overaligned-alloca.ll
 ; RUN: llc -mtriple=arm64-apple-macosx %t/overaligned-alloca-other-strategy.ll -o /dev/null
 
-; RUN: not --crash llc -mtriple=arm64-apple-macosx %t/gc-live-alloca.ll -o /dev/null 2>&1 | FileCheck %t/gc-live-alloca.ll
-
 ;--- frame-record.ll
 ; A leaf function of the strategy has a frame record. A leaf function of another
 ; strategy does not need one (control).
@@ -100,21 +98,3 @@ define void @aligned() gc "statepoint-example" {
   store volatile i8 0, ptr %buf
   ret void
 }
-
-;--- gc-live-alloca.ll
-declare void @foo()
-declare void @use(ptr addrspace(1))
-declare token @llvm.experimental.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)
-declare ptr addrspace(1) @llvm.experimental.gc.relocate.p1(token, i32, i32)
-
-; Only values in stack slots are described by the format. A stack object that is
-; itself a GC root (an alloca in gc-live) has no encoding: the compiler stops
-; instead of writing a stack map that misses the root.
-define void @stack_object() gc "kotlin-native" {
-  %obj = alloca i64, addrspace(1)
-  %t = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 0, i32 0, ptr elementtype(void ()) @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr addrspace(1) %obj) ]
-  %o1 = call ptr addrspace(1) @llvm.experimental.gc.relocate.p1(token %t, i32 0, i32 0)
-  call void @use(ptr addrspace(1) %o1)
-  ret void
-}
-; CHECK: LLVM ERROR: delta-main:
