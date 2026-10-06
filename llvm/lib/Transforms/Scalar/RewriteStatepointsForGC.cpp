@@ -1555,6 +1555,10 @@ static void CreateGCRelocates(ArrayRef<Value *> LiveVariables,
   DenseMap<Type *, Function *> TypeToDeclMap;
 
   for (unsigned i = 0; i < LiveVariables.size(); i++) {
+    // No need to relocate allocas (live references in stack), they can't be moved by gc.
+    if (isa<AllocaInst>(LiveVariables[i]))
+      continue;
+
     // Generate the gc.relocate call and save the result
     Value *BaseIdx = Builder.getInt32(FindIndex(LiveVariables, BasePtrs[i]));
     Value *LiveIdx = Builder.getInt32(i);
