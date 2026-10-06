@@ -62,7 +62,8 @@ std::set<deltamain::Location> DeltaMainStackMapEncoder::collectBases(
         "delta-main: base/derived GC pointers must come in pairs");
 
   auto IsTrackable = [](const Location &Loc) {
-    return Loc.Type == Location::Indirect || Loc.Type == Location::Register;
+    return Loc.Type == Location::Indirect
+           || Loc.Type == Location::Direct;
   };
 
   for (size_t I = RefPairsBegin; I < RefPairsEnd; I += 2) {
@@ -104,7 +105,7 @@ std::set<deltamain::Location> DeltaMainStackMapEncoder::collectBases(
     if (!IsTrackable(Base) || !IsTrackable(Derived))
       report_fatal_error(
           "delta-main: unsupported location kind in a base/derived GC "
-          "pointer pair (expected a callee-saved register or an indirect "
+          "pointer pair (expected an indirect or a direct "
           "stack slot)");
 
     Bases.insert(Base);
@@ -124,19 +125,22 @@ void DeltaMainStackMapEncoder::populateState(
     State &St, const std::set<Location> &Bases) const {
   for (const Location &Loc : Bases) {
     switch (Loc.Type) {
-    case Location::Direct:
-    case Location::Indirect:
-      St.StackSlots.push_back(Loc);
-      break;
+      case Location::Direct:
+        St.DirectSlots.push_back(Loc);
+        break;
 
-    case Location::Register:
-      report_fatal_error(
-          "delta-main: found a register-typed GC root, but "
-          "register-in-stackmap support is not implemented in this port");
+      case Location::Indirect:
+        St.IndirectSlots.push_back(Loc);
+        break;
 
-    default:
-      llvm_unreachable(
-          "collectBases only inserts Direct/Indirect/Register keys");
+      case Location::Register:
+        report_fatal_error(
+            "delta-main: found a register-typed GC root, but "
+            "register-in-stackmap support is not implemented in this port");
+
+      default:
+        llvm_unreachable(
+            "collectBases only inserts Direct/Indirect/Register keys");
     }
   }
 }
@@ -174,7 +178,7 @@ void FunctionState::assignSlotIndices(int64_t FPtoSPDelta) {
   };
 
   auto LocationConverter = [FPtoSPDelta](Location& Loc) {
-    if (Loc.Type != StackMaps::Location::Indirect) {
+    if (Loc.Type == StackMaps::Location::Register) {
       return;
     }
 
@@ -186,7 +190,12 @@ void FunctionState::assignSlotIndices(int64_t FPtoSPDelta) {
   };
 
   for (State &St : States) {
-    for (Location &Slot : St.StackSlots) {
+    for (Location &Slot : St.IndirectSlots) {
+      LocationConverter(Slot);
+      NoteOffset(Slot);
+    }
+
+    for (Location &Slot : St.DirectSlots) {
       LocationConverter(Slot);
       NoteOffset(Slot);
     }
@@ -213,7 +222,10 @@ void FunctionState::assignSlotIndices(int64_t FPtoSPDelta) {
   };
 
   for (State &St : States) {
-    for (Location &Slot : St.StackSlots)
+    for (Location &Slot : St.IndirectSlots)
+      AssignIndex(Slot);
+
+    for (Location &Slot : St.DirectSlots)
       AssignIndex(Slot);
   }
 }
@@ -257,7 +269,8 @@ DeltaMainStackMapEncoder::getLocationMask(ArrayRef<Location> Locs) const {
 
 Delta DeltaMainStackMapEncoder::computeDelta(const State &St) const {
   Delta D;
-  D.StackSlots = getLocationMask(St.StackSlots);
+  D.IndirectSlots = getLocationMask(St.IndirectSlots);
+  D.DirectSlots = getLocationMask(St.DirectSlots);
   return D;
 }
 
@@ -267,8 +280,11 @@ Delta DeltaMainStackMapEncoder::computeDelta(const State &Base,
   Delta OtherDelta = computeDelta(Other);
 
   Delta D;
-  D.StackSlots = BaseDelta.StackSlots;
-  D.StackSlots ^= OtherDelta.StackSlots;
+  D.IndirectSlots = BaseDelta.IndirectSlots;
+  D.IndirectSlots ^= OtherDelta.IndirectSlots;
+
+  D.DirectSlots = BaseDelta.DirectSlots;
+  D.DirectSlots ^= OtherDelta.DirectSlots;
 
   return D;
 }
@@ -326,7 +342,7 @@ void DeltaMainStackMapEncoder::emit(MCStreamer &OS,
   MCSymbol *StackMapsSymbol = Ctx.getOrCreateSymbol("__LLVM_StackMaps");
 
   // Emit magic to verify in runtime.
-  OS.emitInt8(DeltaMainVersion << 4 | ((LazyEnabled) ? 0b10 : 0b00));
+  OS.emitInt8(DeltaMainVersion << 5 | ((LazyEnabled) ? 0b10 : 0b00));
 
   OS.emitULEB128IntValue(Map.Funcs.size());
 

@@ -47,8 +47,11 @@ struct State {
   /// Expression for this call site's offset from the function's start.
   const MCExpr *Pc = nullptr;
 
-  /// Live stack slots holding GC roots.
-  std::vector<Location> StackSlots;
+  /// Live stack slots holding a pointer to GC roots.
+  std::vector<Location> IndirectSlots;
+
+  /// Live stack slots holding GC roots object.
+  std::vector<Location> DirectSlots;
 };
 
 /// All States recorded for one function, before delta-compression.
@@ -78,16 +81,19 @@ struct FunctionState {
 /// function's base state. Bit positions are produced by
 /// DeltaMainStackMapEncoder::enumerate().
 struct Delta {
-  BitVector StackSlots;
+  BitVector IndirectSlots;
+  BitVector DirectSlots;
 
   Delta() = default;
 
   friend bool operator==(const Delta &LHS, const Delta &RHS) {
-    return std::tie(LHS.StackSlots) == std::tie(RHS.StackSlots);
+    return std::tie(LHS.IndirectSlots, LHS.DirectSlots) ==
+           std::tie(RHS.IndirectSlots, RHS.DirectSlots);
   }
 
   friend bool operator<(const Delta &LHS, const Delta &RHS) {
-    return std::tie(LHS.StackSlots) < std::tie(RHS.StackSlots);
+    return std::tie(LHS.IndirectSlots, LHS.DirectSlots) <
+           std::tie(RHS.IndirectSlots, RHS.DirectSlots);
   }
 
   /// Serialize this Delta as a ULEB128-encoded stack-slot bit vector.
