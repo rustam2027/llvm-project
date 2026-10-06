@@ -4407,8 +4407,17 @@ Instruction *InstCombinerImpl::visitCallBase(CallBase &Call) {
     }
     std::optional<OperandBundleUse> Bundle =
         GCSP.getOperandBundle(LLVMContext::OB_gc_live);
+    if (!Bundle)
+      break;
+
+    // Static allocas are roots without gc.relocate.
+    for (Value *V : Bundle->Inputs) {
+      if (auto *AI = dyn_cast<AllocaInst>(V); AI && AI->isStaticAlloca())
+        LiveGcValues.insert(V);
+    }
+
     unsigned NumOfGCLives = LiveGcValues.size();
-    if (!Bundle || NumOfGCLives == Bundle->Inputs.size())
+    if (NumOfGCLives == Bundle->Inputs.size())
       break;
     // We can reduce the size of gc live bundle.
     DenseMap<Value *, unsigned> Val2Idx;
