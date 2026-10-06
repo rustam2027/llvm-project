@@ -4407,6 +4407,14 @@ Instruction *InstCombinerImpl::visitCallBase(CallBase &Call) {
     }
     std::optional<OperandBundleUse> Bundle =
         GCSP.getOperandBundle(LLVMContext::OB_gc_live);
+
+    // A static alloca in gc-live is a stack-object root.
+    // It is recorded in stack maps without gc.relocate.
+    for (Value* V : Bundle->Inputs) {
+      if (auto *AI = dyn_cast<AllocaInst>(V); AI && AI->isStaticAlloca())
+        LiveGcValues.insert(V);
+    }
+
     unsigned NumOfGCLives = LiveGcValues.size();
     if (!Bundle || NumOfGCLives == Bundle->Inputs.size())
       break;
