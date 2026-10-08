@@ -578,6 +578,10 @@ bool AArch64FrameLowering::hasFPImpl(const MachineFunction &MF) const {
       MFI.getMaxCallFrameSize() > DefaultSafeSPDisplacement)
     return true;
 
+  if (const Function &MFF = MF.getFunction();
+      MFF.hasGC() && MFF.getGC() == "kotlin-native")
+    return true;
+
   return false;
 }
 
@@ -2560,8 +2564,21 @@ void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
     emitCalleeSavedSVELocations(MBB, MBBI);
   }
 
-  if (hasFP(MF) && MF.getFunction().hasGC() && MF.getFunction().getGC() == "kotlin-native")
+  if (MF.getFunction().hasGC() && MF.getFunction().getGC() == "kotlin-native") {
+    if (!hasFP(MF))
+      report_fatal_error(
+          ("delta-main: function " + MF.getName() +
+           " has no frame pointer; stack map offsets are FP-relative"));
+
+    if (MFI.hasVarSizedObjects() || RegInfo->hasStackRealignment(MF)) {
+      // Stack map slots are converted from SP to FP with a constant delta,
+      // which is only valid when SP does not move relative to FP.
+      report_fatal_error(("delta-main: function " + MF.getName() +
+                          " has var sized objects or stack realignment"));
+    }
+
     MFI.setOffsetAdjustment(getFPOffset(MF, 0).getFixed() - getStackOffset(MF, 0).getFixed());
+  }
 }
 
 static bool isFuncletReturnInstr(const MachineInstr &MI) {
