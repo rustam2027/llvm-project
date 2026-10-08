@@ -179,7 +179,10 @@ void FunctionState::assignSlotIndices(int64_t FPtoSPDelta) {
     }
 
     if (Loc.Reg != /*Fp*/ 29) {
-      assert(Loc.Reg == /*Sp*/ 31);
+      if (Loc.Reg != /*Sp*/ 31) {
+        report_fatal_error(
+            "delta-main: stack slots must be addressed from SP or FP");
+      }
       Loc.Reg = /*Fp*/ 29;
       Loc.Offset = Loc.Offset + FPtoSPDelta;
     }
