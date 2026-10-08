@@ -1516,13 +1516,14 @@ static void CreateGCRelocates(ArrayRef<Value *> LiveVariables,
     return Index;
   };
   Module *M = StatepointToken->getModule();
-  bool IsLandingPadInst = isa<LandingPadInst>(StatepointToken);
+  bool UseKNRelocate = isa<LandingPadInst>(StatepointToken) &&
+                       !StatepointToken->getType()->isTokenTy();
   // On the exceptional path StatepointToken is a real landingpad, which has
   // a fixed (non-`token`) type that experimental_gc_relocate's first
   // argument rejects. kn_gc_relocate takes a plain i32 instead, so it can be
   // used here in place of the normal intrinsic.
-  int IntrinsicId = IsLandingPadInst ? Intrinsic::experimental_kn_gc_relocate
-                                     : Intrinsic::experimental_gc_relocate;
+  int IntrinsicId = UseKNRelocate ? Intrinsic::experimental_kn_gc_relocate
+                                  : Intrinsic::experimental_gc_relocate;
 
   // All gc_relocate are generated as i8 addrspace(1)* (or a vector type whose
   // element type is i8 addrspace(1)*). We originally generated unique
@@ -1559,7 +1560,7 @@ static void CreateGCRelocates(ArrayRef<Value *> LiveVariables,
     Function *GCRelocateDecl = It->second;
 
     Value *Token = StatepointToken;
-    if (IsLandingPadInst)
+    if (UseKNRelocate)
       Token = Builder.CreateExtractValue(StatepointToken, {1});
 
     // only specify a debug name if we can give a useful one
