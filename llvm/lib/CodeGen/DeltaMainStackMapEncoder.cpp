@@ -125,6 +125,9 @@ void DeltaMainStackMapEncoder::populateState(
   for (const Location &Loc : Bases) {
     switch (Loc.Type) {
     case Location::Direct:
+      report_fatal_error(
+          "delta-main: found a direct-typed GC root, but "
+          "directs-in-stackmap are not supported");
     case Location::Indirect:
       St.StackSlots.push_back(Loc);
       break;
@@ -132,7 +135,7 @@ void DeltaMainStackMapEncoder::populateState(
     case Location::Register:
       report_fatal_error(
           "delta-main: found a register-typed GC root, but "
-          "register-in-stackmap support is not implemented in this port");
+          "registers-in-stackmap are not supported");
 
     default:
       llvm_unreachable(
