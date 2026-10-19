@@ -62,7 +62,6 @@ public:
 
   /// Serialize \p Map to \p OS. Wire format, per function:
   ///   i32   function entry point minus the address of this record
-  ///   i32   function size in bytes
   ///   sleb  Func.BaseOffset
   ///   uleb  Func.StackSize
   ///   ...   Func.Base (see Delta::emit)

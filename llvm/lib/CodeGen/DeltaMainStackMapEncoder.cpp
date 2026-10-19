@@ -153,11 +153,7 @@ FunctionState DeltaMainStackMapEncoder::buildFunctionState(
     const StackMaps::CallsiteInfoList &CSInfos, unsigned StartIdx) const {
   FunctionState Func;
   Func.Symbol = Symbol;
-  Func.End = FnInfo.End;
   Func.StackSize = FnInfo.StackSize;
-
-  if (!Func.End)
-    report_fatal_error("delta-main: function end label was not recorded");
 
   for (unsigned I = 0; I < FnInfo.RecordCount; ++I) {
     const StackMaps::CallsiteInfo &CSI = CSInfos[StartIdx + I];
@@ -315,7 +311,6 @@ FuncDesc DeltaMainStackMapEncoder::buildFuncDesc(const FunctionState &Func) cons
 
   FuncDesc Desc;
   Desc.Symbol = Func.Symbol;
-  Desc.End = Func.End;
   Desc.BaseOffset = Func.BaseOffset;
   Desc.StackSize = Func.StackSize;
 
@@ -340,14 +335,10 @@ void DeltaMainStackMapEncoder::emit(MCStreamer &OS,
         ".Lstackmap_delta_main_start." + Func.Symbol->getName());
     OS.emitLabel(FuncStackMapStart);
 
-    const MCExpr *FuncRef = MCSymbolRefExpr::create(Func.Symbol, Ctx);
-    OS.emitValue(MCBinaryExpr::createSub(
-                     FuncRef, MCSymbolRefExpr::create(FuncStackMapStart, Ctx),
-                     Ctx),
-                 4);
-    OS.emitValue(MCBinaryExpr::createSub(
-                     MCSymbolRefExpr::create(Func.End, Ctx), FuncRef, Ctx),
-                 4);
+    const MCExpr *FuncOffset = MCBinaryExpr::createSub(
+        MCSymbolRefExpr::create(Func.Symbol, Ctx),
+        MCSymbolRefExpr::create(FuncStackMapStart, Ctx), Ctx);
+    OS.emitValue(FuncOffset, 4);
     OS.emitSLEB128IntValue(Func.BaseOffset);
     OS.emitULEB128IntValue(Func.StackSize);
 

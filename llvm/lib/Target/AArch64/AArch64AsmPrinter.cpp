@@ -1125,15 +1125,6 @@ void AArch64AsmPrinter::emitLOHs() {
 void AArch64AsmPrinter::emitFunctionBodyEnd() {
   if (!AArch64FI->getLOHRelated().empty())
     emitLOHs();
-
-  const Function &F = MF->getFunction();
-  if (!F.hasGC() || F.getGC() != "kotlin-native")
-    return;
-  auto &FnInfos = SM.getFnInfos();
-  if (auto It = FnInfos.find(CurrentFnSym); It != FnInfos.end()) {
-    It->second.End = createTempSymbol("kn_func_end");
-    OutStreamer->emitLabel(It->second.End);
-  }
 }
 
 /// GetCPISymbol - Return the symbol for the specified constant pool entry.

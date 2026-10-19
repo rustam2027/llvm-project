@@ -54,7 +54,6 @@ struct State {
 /// All States recorded for one function, before delta-compression.
 struct FunctionState {
   const MCSymbol *Symbol = nullptr;
-  const MCSymbol *End = nullptr;
   int64_t BaseOffset = 0;
   uint64_t StackSize = 0;
   std::vector<State> States;
@@ -99,7 +98,6 @@ struct Delta {
 /// deduplicated set of Deltas referenced by its call sites.
 struct FuncDesc {
   const MCSymbol *Symbol = nullptr;
-  const MCSymbol *End = nullptr;
   int64_t BaseOffset = 0;
   uint64_t StackSize = 0;
 

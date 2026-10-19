@@ -327,7 +327,6 @@ public:
     uint64_t StackSize = 0;
     uint64_t RecordCount = 1;
     int64_t FPtoSPDelta = 0;
-    MCSymbol *End = nullptr;
 
     FunctionInfo() = default;
     explicit FunctionInfo(uint64_t StackSize) : StackSize(StackSize) {};
