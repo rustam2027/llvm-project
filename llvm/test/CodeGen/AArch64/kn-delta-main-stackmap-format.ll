@@ -5,10 +5,11 @@
 ; contract between the compiler and the runtime, as the assembler directives
 ; that produce it (the emitter writes it with .byte/.long/.uleb128 directives):
 ;
-;   magic       .byte   (format version << 4); version is 4
-;   functions   ULEB128 count
-;   per function:
-;     start     .long   function address - __LLVM_StackMaps
+;   per function, one record that starts at the label
+;   .Lstackmap_delta_main_start.<function>; a function stores the address of this
+;   label in its frame, and the runtime finds the record from it:
+;     start     .long   function address - address of the record
+;     size      .long   size of the function in bytes
 ;     base      SLEB128 offset of the first slot from the frame pointer (<= 0)
 ;     size      ULEB128 frame size
 ;     live      ULEB128 bit vector: slot i is the slot at (base - 8 * i)
@@ -45,14 +46,11 @@ define void @one(ptr addrspace(1) %a) gc "kotlin-native" {
   ret void
 }
 
-; The section is named like the LLVM stack maps section, the symbol marks its start.
+; The section is named like the LLVM stack maps section.
 ; CHECK:      .section __LLVM_STACKMAPS,__llvm_stackmaps
-; CHECK:      __LLVM_StackMaps:
-; CHECK-NEXT: .byte 64
-; one function
-; CHECK-NEXT: .byte 1
 ; CHECK-NEXT: .Lstackmap_delta_main_start._one:
-; CHECK-NEXT: .long _one-__LLVM_StackMaps
+; CHECK-NEXT: .long _one-.Lstackmap_delta_main_start._one
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_one
 ; The first slot is below the frame pointer, so the SLEB128 base is negative:
 ; its single byte has the sign bit (bit 6) set.
 ; CHECK-NEXT: .byte {{6[4-9]|[7-9][0-9]|1[0-2][0-9]}}
@@ -79,11 +77,9 @@ define void @nolive() gc "kotlin-native" {
 }
 
 ; A call that has no live GC pointers is still recorded, with an empty live set.
-; CHECK:      __LLVM_StackMaps:
-; CHECK-NEXT: .byte 64
-; CHECK-NEXT: .byte 1
-; CHECK-NEXT: .Lstackmap_delta_main_start._nolive:
-; CHECK-NEXT: .long _nolive-__LLVM_StackMaps
+; CHECK:      .Lstackmap_delta_main_start._nolive:
+; CHECK-NEXT: .long _nolive-.Lstackmap_delta_main_start._nolive
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_nolive
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; empty base live set
@@ -125,8 +121,8 @@ define void @eight(ptr addrspace(1) %a0, ptr addrspace(1) %a1, ptr addrspace(1) 
 
 ; The live set is a bit vector in ULEB128: 7 bits per byte. Eight slots need two
 ; bytes: seven set bits with the continuation flag (0xFF = "\377"), then one bit.
-; CHECK:      __LLVM_StackMaps:
-; CHECK:      .long _eight-__LLVM_StackMaps
+; CHECK:      .long _eight-.Lstackmap_delta_main_start._eight
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_eight
 ; (the base and the frame size come first, each as one or more bytes)
 ; CHECK:      .ascii "\377\001"
 
@@ -150,11 +146,9 @@ define void @shrink(ptr addrspace(1) %a, ptr addrspace(1) %b) gc "kotlin-native"
   ret void
 }
 
-; CHECK:      __LLVM_StackMaps:
-; CHECK-NEXT: .byte 64
-; CHECK-NEXT: .byte 1
-; CHECK-NEXT: .Lstackmap_delta_main_start._shrink:
-; CHECK-NEXT: .long _shrink-__LLVM_StackMaps
+; CHECK:      .Lstackmap_delta_main_start._shrink:
+; CHECK-NEXT: .long _shrink-.Lstackmap_delta_main_start._shrink
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_shrink
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; the base set is the live set of the first call: two slots
@@ -189,7 +183,8 @@ define void @same(ptr addrspace(1) %a) gc "kotlin-native" {
 }
 
 ; CHECK:      .Lstackmap_delta_main_start._same:
-; CHECK-NEXT: .long _same-__LLVM_StackMaps
+; CHECK-NEXT: .long _same-.Lstackmap_delta_main_start._same
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_same
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; CHECK-NEXT: .byte 1
@@ -226,14 +221,11 @@ define void @second(ptr addrspace(1) %a) gc "kotlin-native" {
   ret void
 }
 
-; CHECK:      __LLVM_StackMaps:
-; CHECK-NEXT: .byte 64
-; two functions, each with its own start label and offset
-; CHECK-NEXT: .byte 2
-; CHECK-DAG:  .Lstackmap_delta_main_start._first:
-; CHECK-DAG:  .long _first-__LLVM_StackMaps
-; CHECK-DAG:  .Lstackmap_delta_main_start._second:
-; CHECK-DAG:  .long _second-__LLVM_StackMaps
+; two functions, each record has its own start label and is relative to it
+; CHECK:      .Lstackmap_delta_main_start._first:
+; CHECK-NEXT: .long _first-.Lstackmap_delta_main_start._first
+; CHECK:      .Lstackmap_delta_main_start._second:
+; CHECK-NEXT: .long _second-.Lstackmap_delta_main_start._second
 
 ;--- no-statepoints.ll
 target triple = "arm64-apple-macosx"
@@ -247,7 +239,7 @@ define void @nostate() gc "kotlin-native" {
 }
 
 ; CHECK-NOT: __LLVM_STACKMAPS
-; CHECK-NOT: __LLVM_StackMaps
+; CHECK-NOT: Lstackmap_delta_main_start
 ; CHECK:     _nostate:
 
 ;--- other-strategy.ll
@@ -297,8 +289,5 @@ lpad:
   resume { ptr, i32 } %lp
 }
 
-; CHECK:      __LLVM_StackMaps:
-; CHECK-NEXT: .byte 64
-; CHECK-NEXT: .byte 1
-; CHECK-NEXT: .Lstackmap_delta_main_start._thrower:
-; CHECK-NEXT: .long _thrower-__LLVM_StackMaps
+; CHECK:      .Lstackmap_delta_main_start._thrower:
+; CHECK-NEXT: .long _thrower-.Lstackmap_delta_main_start._thrower

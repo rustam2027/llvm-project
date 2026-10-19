@@ -5,9 +5,6 @@
 ;  - a function using `gc "kotlin-native"` compiles instead of hitting the
 ;    AArch64-only report_fatal_error gate (this test itself IS the AArch64
 ;    target, so it should never trip that gate);
-;  - the module still gets exactly one "__LLVM_StackMaps" symbol (the
-;    delta-main format shares the default format's top-level symbol name,
-;    see DeltaMainStackMapEncoder::emit);
 ;  - each function with a recorded call site gets a
 ;    ".Lstackmap_delta_main_start.<fn>" label immediately before its
 ;    delta-main record.
@@ -50,6 +47,5 @@ entry:
   ret void
 }
 
-; CHECK: __LLVM_StackMaps:
 ; CHECK: .Lstackmap_delta_main_start.test_base_only:
 ; CHECK: .Lstackmap_delta_main_start.test_base_and_derived:

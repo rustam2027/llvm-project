@@ -56,15 +56,13 @@ class MCStreamer;
 /// via AsmPrinter.
 class DeltaMainStackMapEncoder {
 public:
-  explicit DeltaMainStackMapEncoder(int DeltaMainVersion, bool LazyEnabled)
-      : DeltaMainVersion(DeltaMainVersion), LazyEnabled(LazyEnabled) {}
-
   /// Build the delta-main-encoded form of every function in \p SM that has
   /// at least one recorded, GC-relevant call site.
   deltamain::EncodedStackMap build(StackMaps &SM) const;
 
   /// Serialize \p Map to \p OS. Wire format, per function:
-  ///   i32   offset of the function's entry point from "__LLVM_StackMaps"
+  ///   i32   function entry point minus the address of this record
+  ///   i32   function size in bytes
   ///   sleb  Func.BaseOffset
   ///   uleb  Func.StackSize
   ///   ...   Func.Base (see Delta::emit)
@@ -75,9 +73,6 @@ public:
   void emit(MCStreamer &OS, const deltamain::EncodedStackMap &Map) const;
 
 private:
-  int DeltaMainVersion;
-  bool LazyEnabled;
-
   /// Recover the set of unique base GC-pointer locations, and the alloca
   /// roots, that StackMaps::parseStatepointOpers flattened into
   /// \p CSI.Locations. Derived pointers are discarded: this port only
