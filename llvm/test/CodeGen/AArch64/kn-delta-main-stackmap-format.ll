@@ -9,6 +9,7 @@
 ;   .Lstackmap_delta_main_start.<function>; a function stores the address of this
 ;   label in its frame, and the runtime finds the record from it:
 ;     start     .long   function address - address of the record
+;     size      .long   size of the function in bytes
 ;     base      SLEB128 offset of the first slot from the frame pointer (<= 0)
 ;     size      ULEB128 frame size
 ;     live      ULEB128 bit vector: slot i is the slot at (base - 8 * i)
@@ -49,6 +50,7 @@ define void @one(ptr addrspace(1) %a) gc "kotlin-native" {
 ; CHECK:      .section __LLVM_STACKMAPS,__llvm_stackmaps
 ; CHECK-NEXT: .Lstackmap_delta_main_start._one:
 ; CHECK-NEXT: .long _one-.Lstackmap_delta_main_start._one
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_one
 ; The first slot is below the frame pointer, so the SLEB128 base is negative:
 ; its single byte has the sign bit (bit 6) set.
 ; CHECK-NEXT: .byte {{6[4-9]|[7-9][0-9]|1[0-2][0-9]}}
@@ -77,6 +79,7 @@ define void @nolive() gc "kotlin-native" {
 ; A call that has no live GC pointers is still recorded, with an empty live set.
 ; CHECK:      .Lstackmap_delta_main_start._nolive:
 ; CHECK-NEXT: .long _nolive-.Lstackmap_delta_main_start._nolive
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_nolive
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; empty base live set
@@ -119,6 +122,7 @@ define void @eight(ptr addrspace(1) %a0, ptr addrspace(1) %a1, ptr addrspace(1) 
 ; The live set is a bit vector in ULEB128: 7 bits per byte. Eight slots need two
 ; bytes: seven set bits with the continuation flag (0xFF = "\377"), then one bit.
 ; CHECK:      .long _eight-.Lstackmap_delta_main_start._eight
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_eight
 ; (the base and the frame size come first, each as one or more bytes)
 ; CHECK:      .ascii "\377\001"
 
@@ -144,6 +148,7 @@ define void @shrink(ptr addrspace(1) %a, ptr addrspace(1) %b) gc "kotlin-native"
 
 ; CHECK:      .Lstackmap_delta_main_start._shrink:
 ; CHECK-NEXT: .long _shrink-.Lstackmap_delta_main_start._shrink
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_shrink
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; the base set is the live set of the first call: two slots
@@ -179,6 +184,7 @@ define void @same(ptr addrspace(1) %a) gc "kotlin-native" {
 
 ; CHECK:      .Lstackmap_delta_main_start._same:
 ; CHECK-NEXT: .long _same-.Lstackmap_delta_main_start._same
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_same
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; CHECK-NEXT: .byte 1
