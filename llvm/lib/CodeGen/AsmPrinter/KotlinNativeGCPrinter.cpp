@@ -14,19 +14,27 @@
 //===----------------------------------------------------------------------===//
 
 #include "../DeltaMainStackMapEncoder.h"
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/GCMetadataPrinter.h"
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/IR/BuiltinGCs.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
+
+// AArch64FrameLowering reads it to store the record address in the frame.
+namespace llvm {
+cl::opt<bool> KNLazyStackMap("kn-lazy-stackmap", cl::init(true), cl::Hidden);
+} // namespace llvm
 
 namespace {
 
@@ -58,7 +66,14 @@ bool KotlinNativeGCPrinter::emitStackMaps(StackMaps &SM, AsmPrinter &AP) {
   deltamain::EncodedStackMap Map = Encoder.build(SM);
 
   MCContext &Ctx = AP.OutStreamer->getContext();
-  AP.OutStreamer->switchSection(Ctx.getObjectFileInfo()->getStackMapSection());
+  MCSection *Section = Ctx.getObjectFileInfo()->getStackMapSection();
+  // In the lazy mode a function refers to its own record, so the linker can
+  // remove the records of the removed functions. The eager mode refers to no
+  // record, they must stay.
+  if (KNLazyStackMap)
+    if (auto *MachOSection = dyn_cast<MCSectionMachO>(Section))
+      MachOSection->clearAttribute(MachO::S_ATTR_NO_DEAD_STRIP);
+  AP.OutStreamer->switchSection(Section);
 
   Encoder.emit(*AP.OutStreamer, Map);
 
