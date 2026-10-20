@@ -54,21 +54,11 @@ bool KotlinNativeGCPrinter::emitStackMaps(StackMaps &SM, AsmPrinter &AP) {
   if (SM.getCSInfos().empty())
     return true;
 
-  // Register-liveness tracking is not supported at all.
-  // (see DeltaMainStackMapEncoder.h)
-  const int DeltaMainVersion = 4;
-  const bool LazyEnabled = false;
-
-  DeltaMainStackMapEncoder Encoder(DeltaMainVersion, LazyEnabled);
+  DeltaMainStackMapEncoder Encoder;
   deltamain::EncodedStackMap Map = Encoder.build(SM);
 
   MCContext &Ctx = AP.OutStreamer->getContext();
   AP.OutStreamer->switchSection(Ctx.getObjectFileInfo()->getStackMapSection());
-
-  // Emit a dummy symbol to force section inclusion, and to give
-  // DeltaMainStackMapEncoder::emit a fixed point to express each function's
-  // offset relative to.
-  AP.OutStreamer->emitLabel(Ctx.getOrCreateSymbol("__LLVM_StackMaps"));
 
   Encoder.emit(*AP.OutStreamer, Map);
 
