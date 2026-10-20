@@ -1681,8 +1681,6 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
   // Emit annotation remarks.
   addAnnotationRemarksPass(MPM);
 
-  MPM.addPass(RewriteStatepointsForGC());
-
   if (isLTOPreLink(Phase))
     addRequiredLTOPreLinkPasses(MPM);
   return MPM;
@@ -1798,8 +1796,6 @@ PassBuilder::buildThinLTOPreLinkDefaultPipeline(OptimizationLevel Level) {
 
   // Emit annotation remarks.
   addAnnotationRemarksPass(MPM);
-
-  MPM.addPass(RewriteStatepointsForGC());
 
   addRequiredLTOPreLinkPasses(MPM);
 
