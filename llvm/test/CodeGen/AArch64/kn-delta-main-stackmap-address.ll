@@ -39,6 +39,9 @@ define void @f(ptr addrspace(1) %a) gc "kotlin-native" {
 ; MACHO-NEXT:  stur [[R]], [x29, #-16]
 ; MACHO:       bl _foo
 
+; The function refers to its record, so the linker may remove both together.
+; MACHO:       .section __LLVM_STACKMAPS,__llvm_stackmaps{{$}}
+
 ; ELF-LABEL: f:
 ; ELF:       add x29, sp
 ; ELF:       adrp [[R:x[0-9]+]], .Lstackmap_delta_main_start.f
@@ -52,6 +55,7 @@ define void @f(ptr addrspace(1) %a) gc "kotlin-native" {
 ; EAGER-NOT:   adrp
 ; EAGER-NOT:   stur
 ; EAGER:       bl _foo
+; EAGER:       .section __LLVM_STACKMAPS,__llvm_stackmaps,regular,no_dead_strip{{$}}
 ; EAGER:       .Lstackmap_delta_main_start._f:
 
 ; The address is a link-time constant, and the record knows its function by a distance
