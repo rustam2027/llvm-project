@@ -295,7 +295,9 @@ static cl::opt<bool> DisableMultiVectorSpillFill(
 
 STATISTIC(NumRedZoneFunctions, "Number of functions using red zone");
 
-static cl::opt<bool> KNLazyStackMap("kn-lazy-stackmap", cl::init(true), cl::Hidden);
+namespace llvm {
+extern cl::opt<bool> KNLazyStackMap;
+} // namespace llvm
 
 static constexpr int StackMapAddrSlotSize = 16;
 
