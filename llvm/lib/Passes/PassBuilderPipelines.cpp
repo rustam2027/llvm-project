@@ -1907,8 +1907,6 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
     // Emit annotation remarks.
     addAnnotationRemarksPass(MPM);
 
-    MPM.addPass(RewriteStatepointsForGC());
-
     return MPM;
   }
 
@@ -1999,8 +1997,6 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
 
     // Emit annotation remarks.
     addAnnotationRemarksPass(MPM);
-
-    MPM.addPass(RewriteStatepointsForGC());
 
     return MPM;
   }
@@ -2236,8 +2232,6 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
 
   // Emit annotation remarks.
   addAnnotationRemarksPass(MPM);
-
-  MPM.addPass(RewriteStatepointsForGC());
 
   return MPM;
 }
