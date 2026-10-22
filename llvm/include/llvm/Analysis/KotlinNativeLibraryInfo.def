@@ -67,6 +67,17 @@ KNLI_DEFINE_ENUM_INTERNAL(kotlin_native_throw_reading_random_bytes_failed_ptr_el
 KNLI_DEFINE_STRING_INTERNAL("_ZN6kotlin29throwReadingRandomBytesFailedEPKcz")
 KNLI_DEFINE_SIG_INTERNAL(Void, Ptr, Ellip)
 
+/// id objc_msgSend(id self, SEL op, ...);
+/// Not a leaf in general: an Objective-C method can call back into Kotlin and a GC can run inside. That is safe without
+/// a statepoint because the call is made either in the Native thread state, where the roots of the calling frame are
+/// described by the anchor of Kotlin_mm_switchThreadStateNative_delta_main, or in the Runnable state for the methods
+/// that never call Kotlin (see genSendMessage in ObjCExportCodeGenerator.kt).
+/// The entry is needed because a statepoint cannot wrap a variadic call, and LLVM inlines the always_inline wrapper of
+/// a C stub with such a call (a header function that sends a variadic message) into a Kotlin function.
+KNLI_DEFINE_ENUM_INTERNAL(objc_msg_send_ptr_ptr_ellip)
+KNLI_DEFINE_STRING_INTERNAL("objc_msgSend")
+KNLI_DEFINE_SIG_INTERNAL(Any, Ptr, Ptr, Ellip)
+
 #undef KNLI_DEFINE_ENUM_INTERNAL
 #undef KNLI_DEFINE_STRING_INTERNAL
 #undef KNLI_DEFINE_SIG_INTERNAL

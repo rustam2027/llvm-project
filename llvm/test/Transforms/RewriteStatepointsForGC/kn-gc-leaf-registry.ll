@@ -21,6 +21,7 @@ declare void @_ZN6kotlin8internal22RuntimeAssertFailedLogEbPKcS2_z(i1, ptr, ptr,
 declare void @_ZN6kotlin8internal24RuntimeAssertFailedPanicEbPKcS2_z(i1, ptr, ptr, ...)
 declare i32 @_ZN6kotlin18snprintf_with_addrENS_11std_support4spanIcLm18446744073709551615EEEmPKvbPKcz([2 x i64], i64, ptr, i1, ptr, ...)
 declare void @_ZN6kotlin29throwReadingRandomBytesFailedEPKcz(ptr, ...)
+declare ptr @objc_msgSend(ptr, ptr, ...)
 declare void @not_registered()
 
 ; The managed pointer %obj is live across every call. A real statepoint would
@@ -90,6 +91,35 @@ define ptr addrspace(1) @throw_reading_random_bytes_failed(ptr addrspace(1) %obj
   ret ptr addrspace(1) %obj
 }
 
+; A variadic message send is a leaf (a statepoint could not wrap it at all).
+; CHECK-LABEL: @objc_msg_send(
+; CHECK-NOT: gc.statepoint
+; CHECK: ret ptr addrspace(1) %obj
+define ptr addrspace(1) @objc_msg_send(ptr addrspace(1) %obj, ptr %self, ptr %sel, i32 %x) gc "kotlin-native" {
+  %r = call ptr (ptr, ptr, ...) @objc_msgSend(ptr %self, ptr %sel, i32 %x)
+  ret ptr addrspace(1) %obj
+}
+
+; Clang types the call with the fixed parameters of the message (here a format string), the declaration
+; has only `ptr, ptr, ...`. The call is still variadic, so it is a leaf too.
+; CHECK-LABEL: @objc_msg_send_message_type(
+; CHECK-NOT: gc.statepoint
+; CHECK: ret ptr addrspace(1) %obj
+define ptr addrspace(1) @objc_msg_send_message_type(ptr addrspace(1) %obj, ptr %self, ptr %sel, ptr %fmt, i32 %x) gc "kotlin-native" {
+  %r = call ptr (ptr, ptr, ptr, ...) @objc_msgSend(ptr %self, ptr %sel, ptr %fmt, i32 %x)
+  ret ptr addrspace(1) %obj
+}
+
+; A call whose type is not variadic and differs from the declaration is not matched.
+; The Kotlin/Native sends of this kind stay statepoints.
+; CHECK-LABEL: @objc_msg_send_fixed_type(
+; CHECK: call token {{.*}} @llvm.experimental.gc.statepoint
+; CHECK: ret ptr addrspace(1)
+define ptr addrspace(1) @objc_msg_send_fixed_type(ptr addrspace(1) %obj, ptr %self, ptr %sel) gc "kotlin-native" {
+  %r = call ptr @objc_msgSend(ptr %self, ptr %sel, i64 1)
+  ret ptr addrspace(1) %obj
+}
+
 ; Control: an ordinary call is a statepoint, the managed pointer is relocated.
 ; CHECK-LABEL: @control_not_registered(
 ; CHECK: call token {{.*}} @llvm.experimental.gc.statepoint
@@ -120,6 +150,8 @@ declare void @_ZN5konan13consolePrintfEPKcz(ptr)
 declare void @_ZN5konan13consoleErrorfEPKcz(i32, ...)
 ; The first parameter must be a bool (i1), here it is a pointer:
 declare void @_ZN6kotlin8internal22RuntimeAssertFailedLogEbPKcS2_z(ptr, ptr, ptr, ...)
+; objc_msgSend declared with fixed parameters only:
+declare ptr @objc_msgSend(ptr, ptr, i32)
 
 ; CHECK-LABEL: @not_variadic(
 ; CHECK: call token {{.*}} @llvm.experimental.gc.statepoint
@@ -142,6 +174,14 @@ define ptr addrspace(1) @first_parameter_not_pointer(ptr addrspace(1) %obj) gc "
 ; CHECK: ret ptr addrspace(1)
 define ptr addrspace(1) @bool_parameter_is_a_pointer(ptr addrspace(1) %obj, ptr %s) gc "kotlin-native" {
   call void (ptr, ptr, ptr, ...) @_ZN6kotlin8internal22RuntimeAssertFailedLogEbPKcS2_z(ptr %s, ptr %s, ptr %s)
+  ret ptr addrspace(1) %obj
+}
+
+; CHECK-LABEL: @objc_msg_send_not_variadic(
+; CHECK: call token {{.*}} @llvm.experimental.gc.statepoint
+; CHECK: ret ptr addrspace(1)
+define ptr addrspace(1) @objc_msg_send_not_variadic(ptr addrspace(1) %obj, ptr %self, ptr %sel) gc "kotlin-native" {
+  %r = call ptr @objc_msgSend(ptr %self, ptr %sel, i32 1)
   ret ptr addrspace(1) %obj
 }
 

@@ -14,6 +14,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InstrTypes.h"
 #include <array>
 using namespace llvm;
 
@@ -145,6 +146,18 @@ bool llvm::getKotlinNativeLibFunc(const Function &FDecl,
 }
 
 bool llvm::getKotlinNativeLibFunc(const CallBase &CB, KotlinNativeLibFunc &F) {
-  return !CB.isNoBuiltin() && CB.getCalledFunction() &&
-         getKotlinNativeLibFunc(*CB.getCalledFunction(), F);
+  if (CB.isNoBuiltin())
+    return false;
+
+  // getCalledFunction() is null if the type of the call differs from the type of the declaration. Clang types a call
+  // of objc_msgSend (declared as `ptr (ptr, ptr, ...)`) with the fixed parameters of the message, e.g.
+  // `ptr (ptr, ptr, ptr, ...)`. Such a call is still a call of the registered function if it is variadic, like
+  // the declaration; a call with other fixed parameters is not.
+  const auto *Callee = dyn_cast<Function>(CB.getCalledOperand());
+  if (!Callee)
+    return false;
+  const FunctionType *CallTy = CB.getFunctionType();
+  if (CallTy != Callee->getFunctionType() && !CallTy->isVarArg())
+    return false;
+  return getKotlinNativeLibFunc(*Callee, F);
 }
