@@ -67,6 +67,11 @@ KNLI_DEFINE_ENUM_INTERNAL(kotlin_native_throw_reading_random_bytes_failed_ptr_el
 KNLI_DEFINE_STRING_INTERNAL("_ZN6kotlin29throwReadingRandomBytesFailedEPKcz")
 KNLI_DEFINE_SIG_INTERNAL(Void, Ptr, Ellip)
 
+/// id objc_msgSend(id self, SEL op, ...);
+KNLI_DEFINE_ENUM_INTERNAL(objc_msg_send_ptr_ptr_ellip)
+KNLI_DEFINE_STRING_INTERNAL("objc_msgSend")
+KNLI_DEFINE_SIG_INTERNAL(Any, Ptr, Ptr, Ellip)
+
 #undef KNLI_DEFINE_ENUM_INTERNAL
 #undef KNLI_DEFINE_STRING_INTERNAL
 #undef KNLI_DEFINE_SIG_INTERNAL

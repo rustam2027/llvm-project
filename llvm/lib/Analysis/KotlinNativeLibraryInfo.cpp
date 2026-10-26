@@ -14,6 +14,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InstrTypes.h"
 #include <array>
 using namespace llvm;
 
@@ -145,6 +146,15 @@ bool llvm::getKotlinNativeLibFunc(const Function &FDecl,
 }
 
 bool llvm::getKotlinNativeLibFunc(const CallBase &CB, KotlinNativeLibFunc &F) {
-  return !CB.isNoBuiltin() && CB.getCalledFunction() &&
-         getKotlinNativeLibFunc(*CB.getCalledFunction(), F);
+  if (CB.isNoBuiltin())
+    return false;
+
+  // getCalledFunction() is null if the type of the call differs from the type of the declaration.
+  const auto *Callee = dyn_cast<Function>(CB.getCalledOperand());
+  if (!Callee)
+    return false;
+  const FunctionType *CallTy = CB.getFunctionType();
+  if (CallTy != Callee->getFunctionType() && !CallTy->isVarArg())
+    return false;
+  return getKotlinNativeLibFunc(*Callee, F);
 }
