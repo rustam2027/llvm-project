@@ -32,6 +32,7 @@
 ; RUN: llc -O0 %t/invoke.ll -o - | FileCheck %t/invoke.ll
 ; RUN: llc -O0 %t/direct-slot.ll -o - | FileCheck %t/direct-slot.ll
 ; RUN: llc -O2 %t/direct-slot.ll -o - | FileCheck %t/direct-slot.ll
+; RUN: llc -O0 %t/stack-slot.ll -o - | FileCheck %t/stack-slot.ll
 ; RUN: llc -O2 %t/one-value.ll -o - | FileCheck %t/one-value.ll
 
 ;--- one-value.ll
@@ -331,6 +332,38 @@ define void @object() gc "kotlin-native" {
 ; CHECK-NEXT: .byte 1
 ; CHECK-NEXT: .byte 1
 ; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_object
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 0
+
+;--- stack-slot.ll
+target triple = "arm64-apple-macosx"
+
+declare void @foo()
+declare void @use(ptr addrspace(1))
+declare token @llvm.experimental.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)
+
+; A local variable that stays in memory has no relocate: the root is the value in
+; the slot, so it is an indirect slot, unlike a stack object (direct-slot.ll).
+define void @slot(ptr addrspace(1) %a) gc "kotlin-native" {
+  %s = alloca ptr addrspace(1), align 8
+  store ptr addrspace(1) %a, ptr %s
+  %t = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 0, i32 0, ptr elementtype(void ()) @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr %s) ]
+  %v = load ptr addrspace(1), ptr %s
+  call void @use(ptr addrspace(1) %v)
+  ret void
+}
+
+; CHECK:      .Lstackmap_delta_main_start._slot:
+; CHECK-NEXT: .long _slot-.Lstackmap_delta_main_start._slot
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_slot
+; CHECK-NEXT: .byte {{[0-9]+}}
+; CHECK-NEXT: .byte {{[0-9]+}}
+; one indirect slot, no direct slots
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_slot
 ; CHECK-NEXT: .byte 0
 ; CHECK-NEXT: .byte 0
 ; CHECK-NEXT: .byte 0

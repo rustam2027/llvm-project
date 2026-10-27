@@ -168,8 +168,8 @@ struct GCPtrLivenessData {
   /// Values defined in this block.
   MapVector<BasicBlock *, SetVector<Value *>> KillSet;
 
-  /// Allocas whose lifetime starts in this block.
-  MapVector<BasicBlock *, SetVector<Value *>> LifetimeKill;
+  /// Allocas defined in this block: lifetime.start and stores to slots.
+  MapVector<BasicBlock *, SetVector<Value *>> MemoryKill;
 
   /// Values used in this block (and thus live); does not included values
   /// killed within this block.
@@ -2905,6 +2905,7 @@ static bool insertParsePoints(Function &F, DominatorTree &DT,
 #endif
   }
   unique_unsorted(Live);
+  llvm::erase_if(Live, [](Value *V) { return isa<AllocaInst>(V); });
 
 #ifndef NDEBUG
   // Validation check
@@ -3239,6 +3240,22 @@ static AllocaInst *getLifetimeStartAlloca(const Instruction &I) {
   return dyn_cast<AllocaInst>(II->getArgOperand(1));
 }
 
+/// An alloca that holds a GC pointer in memory (a local variable not promoted
+/// to SSA). The GC root is its content.
+static bool isStackSlot(Value *V, GCStrategy *GC) {
+  auto *AI = dyn_cast<AllocaInst>(V);
+  return AI && AI->isStaticAlloca() &&
+         isHandledGCPointerType(AI->getAllocatedType(), GC) &&
+         !isHandledGCPointerType(AI->getType(), GC);
+}
+
+static AllocaInst *getStackSlotStore(Instruction &I, GCStrategy *GC) {
+  auto *SI = dyn_cast<StoreInst>(&I);
+  if (SI && isStackSlot(SI->getPointerOperand(), GC))
+    return cast<AllocaInst>(SI->getPointerOperand());
+  return nullptr;
+}
+
 static AllocaInst *getStackObject(Value *V) {
   while (true) {
     if (auto *AI = dyn_cast<AllocaInst>(V))
@@ -3277,10 +3294,20 @@ static void computeLiveInValues(BasicBlock::reverse_iterator Begin,
     if ((isa<GetElementPtrInst>(I) || isa<CastInst>(I)) && getStackObject(&I))
       continue;
 
+    // A store overwrites the whole slot.
+    AllocaInst *StoredSlot = getStackSlotStore(I, GC);
+    if (StoredSlot)
+      LiveTmp.remove(StoredSlot);
+
     // USE - Add to the LiveIn set for this instruction
     for (Value *V : I.operands()) {
       assert(!isUnhandledGCPointerType(V->getType(), GC) &&
              "support for FCA unimplemented");
+      if (isStackSlot(V, GC)) {
+        if (V != StoredSlot)
+          LiveTmp.insert(V);
+        continue;
+      }
       if (isHandledGCPointerType(V->getType(), GC) && !isa<Constant>(V)) {
         // The choice to exclude all things constant here is slightly subtle.
         // There are two independent reasons:
@@ -3331,11 +3358,15 @@ static SetVector<Value *> computeKillSet(BasicBlock *BB, GCStrategy *GC) {
   return KillSet;
 }
 
-static SetVector<Value *> computeLifetimeKillSet(BasicBlock *BB) {
+static SetVector<Value *> computeMemoryKillSet(BasicBlock *BB,
+                                               GCStrategy *GC) {
   SetVector<Value *> Kill;
-  for (Instruction &I : *BB)
+  for (Instruction &I : *BB) {
     if (auto *AI = getLifetimeStartAlloca(I))
       Kill.insert(AI);
+    else if (auto *AI = getStackSlotStore(I, GC))
+      Kill.insert(AI);
+  }
   return Kill;
 }
 
@@ -3375,7 +3406,7 @@ static void computeLiveInValues(DominatorTree &DT, Function &F,
   // Seed the liveness for each individual block
   for (BasicBlock &BB : F) {
     Data.KillSet[&BB] = computeKillSet(&BB, GC);
-    Data.LifetimeKill[&BB] = computeLifetimeKillSet(&BB);
+    Data.MemoryKill[&BB] = computeMemoryKillSet(&BB, GC);
     auto &LiveSet = Data.LiveSet[&BB];
     LiveSet.clear();
     computeLiveInValues(BB.rbegin(), BB.rend(), LiveSet, GC);
@@ -3389,7 +3420,7 @@ static void computeLiveInValues(DominatorTree &DT, Function &F,
     computeLiveOutSeed(&BB, Out, GC);
     auto &In = Data.LiveIn[&BB] = Data.LiveSet[&BB];
     SetVector<Value *> Flow = Out;
-    Flow.set_subtract(Data.LifetimeKill[&BB]);
+    Flow.set_subtract(Data.MemoryKill[&BB]);
     In.set_union(Flow);
     In.set_subtract(Data.KillSet[&BB]);
     if (!In.empty())
@@ -3418,7 +3449,7 @@ static void computeLiveInValues(DominatorTree &DT, Function &F,
 
     // Apply the effects of this basic block
     SetVector<Value *> LiveTmp = LiveOut;
-    LiveTmp.set_subtract(Data.LifetimeKill[BB]);
+    LiveTmp.set_subtract(Data.MemoryKill[BB]);
     LiveTmp.set_union(Data.LiveSet[BB]);
     LiveTmp.set_subtract(Data.KillSet[BB]);
 

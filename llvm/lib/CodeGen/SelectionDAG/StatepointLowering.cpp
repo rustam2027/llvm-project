@@ -682,6 +682,10 @@ lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
           FI->getIndex(), Builder.getFrameIndexTy()));
 
       auto &MF = Builder.DAG.getMachineFunction();
+      // The root of a slot is its content, the root of a stack object is its address.
+      if (auto *AI = dyn_cast<AllocaInst>(V))
+        if (AI->getAllocatedType()->isPointerTy())
+          MF.getFrameInfo().markAsStatepointSpillSlotObjectIndex(FI->getIndex());
       auto *MMO = getMachineMemOperand(MF, *FI);
       MemRefs.push_back(MMO);
     }
