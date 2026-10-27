@@ -32,6 +32,8 @@
 ; RUN: llc -O0 %t/invoke.ll -o - | FileCheck %t/invoke.ll
 ; RUN: llc -O0 %t/direct-slot.ll -o - | FileCheck %t/direct-slot.ll
 ; RUN: llc -O2 %t/direct-slot.ll -o - | FileCheck %t/direct-slot.ll
+; RUN: not --crash llc -O0 %t/invalid-direct-slot.ll -o /dev/null 2>&1 | FileCheck %t/invalid-direct-slot.ll --check-prefix=INVALID
+; RUN: llc -O0 %t/stack-slot.ll -o - | FileCheck %t/stack-slot.ll
 ; RUN: llc -O2 %t/one-value.ll -o - | FileCheck %t/one-value.ll
 
 ;--- one-value.ll
@@ -312,10 +314,14 @@ declare void @foo()
 declare void @use(ptr addrspace(1))
 declare token @llvm.experimental.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)
 
-; A stack object in gc-live has no relocate and is described by the second
-; bit vector: the object lives at the slot.
-define void @object() gc "kotlin-native" {
-  %obj = alloca i64, addrspace(1)
+; A whole Kotlin stack object starts with a pointer-sized ObjHeader word. It
+; has no relocate and is described by the second bit vector: the object itself
+; lives at the slot.
+%Object = type { i64, ptr addrspace(1), ptr addrspace(1) }
+
+define void @object(ptr addrspace(1) %typeInfo) gc "kotlin-native" {
+  %obj = alloca %Object, align 8, addrspace(1)
+  store ptr addrspace(1) %typeInfo, ptr addrspace(1) %obj
   %t = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 0, i32 0, ptr elementtype(void ()) @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr addrspace(1) %obj) ]
   call void @use(ptr addrspace(1) %obj)
   ret void
@@ -331,6 +337,55 @@ define void @object() gc "kotlin-native" {
 ; CHECK-NEXT: .byte 1
 ; CHECK-NEXT: .byte 1
 ; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_object
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 0
+
+;--- invalid-direct-slot.ll
+target triple = "arm64-apple-macosx"
+
+declare void @foo()
+declare void @use(ptr addrspace(1))
+declare token @llvm.experimental.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)
+
+; Primitive AS1 storage is not a Kotlin object and cannot be a Direct GC root.
+define void @not_an_object() gc "kotlin-native" {
+  %obj = alloca i64, addrspace(1)
+  %t = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 0, i32 0, ptr elementtype(void ()) @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr addrspace(1) %obj) ]
+  call void @use(ptr addrspace(1) %obj)
+  ret void
+}
+
+; INVALID: kotlin-native: a Direct GC root must be a whole stack object with an ObjHeader
+
+;--- stack-slot.ll
+target triple = "arm64-apple-macosx"
+
+declare void @foo()
+declare void @use(ptr addrspace(1))
+declare token @llvm.experimental.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)
+
+; A local variable that stays in memory has no relocate: the root is the value in
+; the slot, so it is an indirect slot, unlike a stack object (direct-slot.ll).
+define void @slot(ptr addrspace(1) %a) gc "kotlin-native" {
+  %s = alloca ptr addrspace(1), align 8
+  store ptr addrspace(1) %a, ptr %s
+  %t = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 0, i32 0, ptr elementtype(void ()) @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr %s) ]
+  %v = load ptr addrspace(1), ptr %s
+  call void @use(ptr addrspace(1) %v)
+  ret void
+}
+
+; CHECK:      .Lstackmap_delta_main_start._slot:
+; CHECK-NEXT: .long _slot-.Lstackmap_delta_main_start._slot
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_slot
+; CHECK-NEXT: .byte {{[0-9]+}}
+; CHECK-NEXT: .byte {{[0-9]+}}
+; one indirect slot, no direct slots
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_slot
 ; CHECK-NEXT: .byte 0
 ; CHECK-NEXT: .byte 0
 ; CHECK-NEXT: .byte 0
