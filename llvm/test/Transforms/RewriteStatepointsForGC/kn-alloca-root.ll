@@ -20,12 +20,13 @@ define void @test() gc "statepoint-example" {
   ret void
 }
 
-; A pointer into the object is recomputed from the alloca.
+; A pointer into the object is a use of the object: it is not live, relocated
+; or rematerialised on its own.
 ; CHECK-LABEL: @derived(
 ; CHECK-NOT:   gc.relocate
+; CHECK-NOT:   .remat
 ; CHECK:       "gc-live"(ptr addrspace(1) %obj)
-; CHECK:       [[F:%.*]] = getelementptr %T, ptr addrspace(1) %obj, i32 0, i32 1
-; CHECK:       @use, i32 1, i32 0, ptr addrspace(1) [[F]]
+; CHECK:       @use, i32 1, i32 0, ptr addrspace(1) %f,
 define void @derived() gc "statepoint-example" {
   %obj = alloca %T, align 8, addrspace(1)
   %f = getelementptr %T, ptr addrspace(1) %obj, i32 0, i32 1
