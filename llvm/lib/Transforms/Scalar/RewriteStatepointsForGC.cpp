@@ -168,6 +168,9 @@ struct GCPtrLivenessData {
   /// Values defined in this block.
   MapVector<BasicBlock *, SetVector<Value *>> KillSet;
 
+  /// Allocas whose lifetime starts in this block.
+  MapVector<BasicBlock *, SetVector<Value *>> LifetimeKill;
+
   /// Values used in this block (and thus live); does not included values
   /// killed within this block.
   MapVector<BasicBlock *, SetVector<Value *>> LiveSet;
@@ -3229,6 +3232,26 @@ bool RewriteStatepointsForGC::runOnFunction(Function &F, DominatorTree &DT,
 // TODO: Consider using bitvectors for liveness, the set of potentially
 // interesting values should be small and easy to pre-compute.
 
+static AllocaInst *getLifetimeStartAlloca(const Instruction &I) {
+  auto *II = dyn_cast<IntrinsicInst>(&I);
+  if (!II || II->getIntrinsicID() != Intrinsic::lifetime_start)
+    return nullptr;
+  return dyn_cast<AllocaInst>(II->getArgOperand(1));
+}
+
+static AllocaInst *getStackObject(Value *V) {
+  while (true) {
+    if (auto *AI = dyn_cast<AllocaInst>(V))
+      return AI;
+    if (auto *GEP = dyn_cast<GEPOperator>(V))
+      V = GEP->getPointerOperand();
+    else if (auto *CI = dyn_cast<CastInst>(V))
+      V = CI->getOperand(0);
+    else
+      return nullptr;
+  }
+}
+
 /// Compute the live-in set for the location rbegin starting from
 /// the live-out set of the basic block
 static void computeLiveInValues(BasicBlock::reverse_iterator Begin,
@@ -3238,9 +3261,20 @@ static void computeLiveInValues(BasicBlock::reverse_iterator Begin,
     // KILL/Def - Remove this definition from LiveIn
     LiveTmp.remove(&I);
 
+    // Allocas are defined by lifetime.start; the markers are not uses.
+    if (I.isLifetimeStartOrEnd()) {
+      if (auto *AI = getLifetimeStartAlloca(I))
+        LiveTmp.remove(AI);
+      continue;
+    }
+
     // Don't consider *uses* in PHI nodes, we handle their contribution to
     // predecessor blocks when we seed the LiveOut sets
     if (isa<PHINode>(I))
+      continue;
+
+    // Address arithmetic on a stack object only uses it where the result is used.
+    if ((isa<GetElementPtrInst>(I) || isa<CastInst>(I)) && getStackObject(&I))
       continue;
 
     // USE - Add to the LiveIn set for this instruction
@@ -3258,7 +3292,11 @@ static void computeLiveInValues(BasicBlock::reverse_iterator Begin,
         // locally exploit facts without respect to global reachability.  This
         // can create sections of code which are dynamically unreachable and
         // contain just about anything.  (see constants.ll in tests)
-        LiveTmp.insert(V);
+        // A pointer into a stack object is a use of the object itself.
+        if (auto *AI = getStackObject(V))
+          LiveTmp.insert(AI);
+        else
+          LiveTmp.insert(V);
       }
     }
   }
@@ -3275,8 +3313,12 @@ static void computeLiveOutSeed(BasicBlock *BB, SetVector<Value *> &LiveTmp,
       Value *V = PN->getIncomingValueForBlock(BB);
       assert(!isUnhandledGCPointerType(V->getType(), GC) &&
              "support for FCA unimplemented");
-      if (isHandledGCPointerType(V->getType(), GC) && !isa<Constant>(V))
-        LiveTmp.insert(V);
+      if (isHandledGCPointerType(V->getType(), GC) && !isa<Constant>(V)) {
+        if (auto *AI = getStackObject(V))
+          LiveTmp.insert(AI);
+        else
+          LiveTmp.insert(V);
+      }
     }
   }
 }
@@ -3287,6 +3329,14 @@ static SetVector<Value *> computeKillSet(BasicBlock *BB, GCStrategy *GC) {
     if (isHandledGCPointerType(I.getType(), GC))
       KillSet.insert(&I);
   return KillSet;
+}
+
+static SetVector<Value *> computeLifetimeKillSet(BasicBlock *BB) {
+  SetVector<Value *> Kill;
+  for (Instruction &I : *BB)
+    if (auto *AI = getLifetimeStartAlloca(I))
+      Kill.insert(AI);
+  return Kill;
 }
 
 #ifndef NDEBUG
@@ -3325,6 +3375,7 @@ static void computeLiveInValues(DominatorTree &DT, Function &F,
   // Seed the liveness for each individual block
   for (BasicBlock &BB : F) {
     Data.KillSet[&BB] = computeKillSet(&BB, GC);
+    Data.LifetimeKill[&BB] = computeLifetimeKillSet(&BB);
     auto &LiveSet = Data.LiveSet[&BB];
     LiveSet.clear();
     computeLiveInValues(BB.rbegin(), BB.rend(), LiveSet, GC);
@@ -3337,7 +3388,9 @@ static void computeLiveInValues(DominatorTree &DT, Function &F,
     auto &Out = Data.LiveOut[&BB] = SetVector<Value *>();
     computeLiveOutSeed(&BB, Out, GC);
     auto &In = Data.LiveIn[&BB] = Data.LiveSet[&BB];
-    In.set_union(Out);
+    SetVector<Value *> Flow = Out;
+    Flow.set_subtract(Data.LifetimeKill[&BB]);
+    In.set_union(Flow);
     In.set_subtract(Data.KillSet[&BB]);
     if (!In.empty())
       Worklist.insert_range(predecessors(&BB));
@@ -3365,6 +3418,7 @@ static void computeLiveInValues(DominatorTree &DT, Function &F,
 
     // Apply the effects of this basic block
     SetVector<Value *> LiveTmp = LiveOut;
+    LiveTmp.set_subtract(Data.LifetimeKill[BB]);
     LiveTmp.set_union(Data.LiveSet[BB]);
     LiveTmp.set_subtract(Data.KillSet[BB]);
 
