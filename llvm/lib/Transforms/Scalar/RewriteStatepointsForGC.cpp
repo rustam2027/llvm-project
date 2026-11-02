@@ -3242,18 +3242,31 @@ static AllocaInst *getLifetimeStartAlloca(const Instruction &I) {
 
 /// An alloca that holds a GC pointer in memory (a local variable not promoted
 /// to SSA). The GC root is its content.
-static bool isStackSlot(Value *V, GCStrategy *GC) {
-  auto *AI = dyn_cast<AllocaInst>(V);
-  return AI && AI->isStaticAlloca() &&
+static bool isStackSlot(const AllocaInst *AI, GCStrategy *GC) {
+  return AI->isStaticAlloca() &&
          isHandledGCPointerType(AI->getAllocatedType(), GC) &&
          !isHandledGCPointerType(AI->getType(), GC);
 }
 
+/// The slot V refers to: the slot itself or a zero-offset GEP or cast of it.
+static AllocaInst *getStackSlot(Value *V, GCStrategy *GC) {
+  while (true) {
+    if (auto *AI = dyn_cast<AllocaInst>(V))
+      return isStackSlot(AI, GC) ? AI : nullptr;
+    if (auto *GEP = dyn_cast<GEPOperator>(V)) {
+      if (!GEP->hasAllZeroIndices())
+        return nullptr;
+      V = GEP->getPointerOperand();
+    } else if (auto *CI = dyn_cast<CastInst>(V)) {
+      V = CI->getOperand(0);
+    } else
+      return nullptr;
+  }
+}
+
 static AllocaInst *getStackSlotStore(Instruction &I, GCStrategy *GC) {
   auto *SI = dyn_cast<StoreInst>(&I);
-  if (SI && isStackSlot(SI->getPointerOperand(), GC))
-    return cast<AllocaInst>(SI->getPointerOperand());
-  return nullptr;
+  return SI ? getStackSlot(SI->getPointerOperand(), GC) : nullptr;
 }
 
 static AllocaInst *getStackObject(Value *V) {
@@ -3303,9 +3316,9 @@ static void computeLiveInValues(BasicBlock::reverse_iterator Begin,
     for (Value *V : I.operands()) {
       assert(!isUnhandledGCPointerType(V->getType(), GC) &&
              "support for FCA unimplemented");
-      if (isStackSlot(V, GC)) {
-        if (V != StoredSlot)
-          LiveTmp.insert(V);
+      if (auto *Slot = getStackSlot(V, GC)) {
+        if (Slot != StoredSlot)
+          LiveTmp.insert(Slot);
         continue;
       }
       if (isHandledGCPointerType(V->getType(), GC) && !isa<Constant>(V)) {

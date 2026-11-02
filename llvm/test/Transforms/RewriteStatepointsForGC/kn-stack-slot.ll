@@ -71,3 +71,76 @@ loop:
 exit:
   ret void
 }
+
+; A store through a zero-offset GEP of the slot defines the slot like a direct
+; store: the overwritten value stops being a root before it, the slot becomes
+; one where its content is read later.
+; CHECK-LABEL: @gep_store_kill(
+; CHECK:       @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr addrspace(1) %b) ]
+; CHECK:       @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr %s) ]
+define void @gep_store_kill(ptr addrspace(1) %a, ptr addrspace(1) %b) gc "kotlin-native" {
+  %s = alloca ptr addrspace(1), align 8
+  %slot.addr = getelementptr ptr addrspace(1), ptr %s, i64 0
+  store ptr addrspace(1) %a, ptr %s
+  call void @foo()
+  store ptr addrspace(1) %b, ptr %slot.addr
+  call void @foo()
+  %v = load ptr addrspace(1), ptr %s
+  call void @use(ptr addrspace(1) %v)
+  ret void
+}
+
+; The same through a cast of the slot address.
+; CHECK-LABEL: @cast_store_kill(
+; CHECK:       @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr addrspace(1) %b) ]
+; CHECK:       @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr %s) ]
+define void @cast_store_kill(ptr addrspace(1) %a, ptr addrspace(1) %b) gc "kotlin-native" {
+  %s = alloca ptr addrspace(1), align 8
+  %slot.cast = addrspacecast ptr %s to ptr addrspace(1)
+  store ptr addrspace(1) %a, ptr %s
+  call void @foo()
+  store ptr addrspace(1) %b, ptr addrspace(1) %slot.cast
+  call void @foo()
+  %v = load ptr addrspace(1), ptr %s
+  call void @use(ptr addrspace(1) %v)
+  ret void
+}
+
+; The only store to the slot goes through the GEP: the slot is not a root
+; before the first store (on the first loop iteration it holds garbage) and
+; becomes one where the stored content is read.
+; CHECK-LABEL: @gep_store_loop(
+; CHECK:       loop:
+; CHECK:       @foo, i32 0, i32 0, i32 0, i32 0){{$}}
+; CHECK:       @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr %s) ]
+define void @gep_store_loop(i1 %c) gc "kotlin-native" {
+entry:
+  %s = alloca ptr addrspace(1), align 8
+  %slot.addr = getelementptr ptr addrspace(1), ptr %s, i64 0
+  br label %loop
+
+loop:
+  call void @foo()
+  store ptr addrspace(1) null, ptr %slot.addr
+  call void @foo()
+  %v = load ptr addrspace(1), ptr %s
+  call void @use(ptr addrspace(1) %v)
+  br i1 %c, label %loop, label %exit
+
+exit:
+  ret void
+}
+
+; A read through the GEP uses the slot: the slot is a root at the statepoint
+; between the store and the read, carried by the slot, not by the stored value.
+; CHECK-LABEL: @gep_load(
+; CHECK:       @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr %s) ]
+define void @gep_load(ptr addrspace(1) %a) gc "kotlin-native" {
+  %s = alloca ptr addrspace(1), align 8
+  %slot.addr = getelementptr ptr addrspace(1), ptr %s, i64 0
+  store ptr addrspace(1) %a, ptr %slot.addr
+  call void @foo()
+  %v = load ptr addrspace(1), ptr %slot.addr
+  call void @use(ptr addrspace(1) %v)
+  ret void
+}
