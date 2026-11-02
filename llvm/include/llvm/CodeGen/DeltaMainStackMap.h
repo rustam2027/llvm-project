@@ -50,7 +50,8 @@ struct State {
   /// Live stack slots holding a pointer to GC roots.
   std::vector<Location> IndirectSlots;
 
-  /// Live stack slots holding GC roots object.
+  /// Addresses of whole Kotlin stack objects, each beginning with ObjHeader.
+  /// Unlike IndirectSlots, these addresses must not be dereferenced as slots.
   std::vector<Location> DirectSlots;
 };
 
