@@ -20,6 +20,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
@@ -41,6 +42,7 @@
 #include "llvm/IR/Statepoint.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -60,6 +62,18 @@ STATISTIC(NumSlotsAllocatedForStatepoints,
 STATISTIC(NumOfStatepoints, "Number of statepoint nodes encountered");
 STATISTIC(StatepointMaxSlotsRequired,
           "Maximum number of stack slots required for a singe statepoint");
+// Kotlin object bodies start with a pointer-sized ObjHeader word, possibly
+// nested in ArrayHeader. Opaque pointers preserve that layout in the alloca.
+static bool hasKotlinObjectHeaderLayout(const Type *Ty) {
+  bool HasAggregate = false;
+  while (const auto *StructTy = dyn_cast<StructType>(Ty)) {
+    HasAggregate = true;
+    if (StructTy->isOpaque() || StructTy->getNumElements() == 0)
+      return false;
+    Ty = StructTy->getElementType(0);
+  }
+  return HasAggregate && (Ty->isPointerTy() || Ty->isIntegerTy(64));
+}
 
 static cl::opt<bool> UseRegistersForDeoptValues(
     "use-registers-for-deopt-values", cl::Hidden, cl::init(false),
@@ -683,10 +697,18 @@ lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
 
       auto &MF = Builder.DAG.getMachineFunction();
       // The root of a slot is its content, the root of a stack object is its address.
-      if (Builder.GFI->getStrategy().getName() == "kotlin-native")
-        if (auto *AI = dyn_cast<AllocaInst>(V))
-          if (AI->getAllocatedType()->isPointerTy())
+      if (Builder.GFI->getStrategy().getName() == "kotlin-native") {
+        if (const auto *AI = dyn_cast<AllocaInst>(getUnderlyingObject(V))) {
+          if (AI->getAllocatedType()->isPointerTy()) {
             MF.getFrameInfo().markAsStatepointSpillSlotObjectIndex(FI->getIndex());
+          } else if (AI->getAddressSpace() == 1 &&
+                     !hasKotlinObjectHeaderLayout(AI->getAllocatedType())) {
+            report_fatal_error(
+                "kotlin-native: a Direct GC root must be a whole stack object "
+                "with an ObjHeader");
+          }
+        }
+      }
       auto *MMO = getMachineMemOperand(MF, *FI);
       MemRefs.push_back(MMO);
     }
