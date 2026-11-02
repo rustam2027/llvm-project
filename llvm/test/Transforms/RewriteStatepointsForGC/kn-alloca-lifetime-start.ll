@@ -89,3 +89,48 @@ loop:
 exit:
   ret void
 }
+
+; A marker on a zero-offset GEP of the alloca also kills the object:
+; the safepoint before the marker does not see it.
+; CHECK-LABEL: @gep_marker(
+; CHECK:       @foo, i32 0, i32 0, i32 0, i32 0){{$}}
+; CHECK:       @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr addrspace(1) %obj) ]
+define void @gep_marker() gc "kotlin-native" {
+  %obj = alloca %T, align 8, addrspace(1)
+  call void @foo()
+  %p = getelementptr %T, ptr addrspace(1) %obj, i32 0
+  call void @llvm.lifetime.start.p1(i64 16, ptr addrspace(1) %p)
+  store i64 0, ptr addrspace(1) %obj
+  call void @foo()
+  call void @use(ptr addrspace(1) %obj)
+  ret void
+}
+
+; Same through a cast of the alloca.
+; CHECK-LABEL: @cast_marker(
+; CHECK:       @foo, i32 0, i32 0, i32 0, i32 0){{$}}
+; CHECK:       @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr %raw) ]
+define void @cast_marker() gc "kotlin-native" {
+  %raw = alloca %T, align 8
+  call void @foo()
+  %obj = addrspacecast ptr %raw to ptr addrspace(1)
+  call void @llvm.lifetime.start.p1(i64 16, ptr addrspace(1) %obj)
+  store i64 0, ptr addrspace(1) %obj
+  call void @foo()
+  call void @use(ptr addrspace(1) %obj)
+  ret void
+}
+
+; A marker on a field GEP is not the birth of the whole object:
+; the object stays live at the safepoint before the marker.
+; CHECK-LABEL: @field_gep_marker(
+; CHECK:       @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr addrspace(1) %obj) ]
+define void @field_gep_marker() gc "kotlin-native" {
+  %obj = alloca %T, align 8, addrspace(1)
+  call void @foo()
+  %p = getelementptr %T, ptr addrspace(1) %obj, i32 0, i32 1
+  call void @llvm.lifetime.start.p1(i64 8, ptr addrspace(1) %p)
+  store i64 0, ptr addrspace(1) %obj
+  call void @use(ptr addrspace(1) %obj)
+  ret void
+}

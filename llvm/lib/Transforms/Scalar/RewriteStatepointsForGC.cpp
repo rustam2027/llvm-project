@@ -3237,7 +3237,22 @@ static AllocaInst *getLifetimeStartAlloca(const Instruction &I) {
   auto *II = dyn_cast<IntrinsicInst>(&I);
   if (!II || II->getIntrinsicID() != Intrinsic::lifetime_start)
     return nullptr;
-  return dyn_cast<AllocaInst>(II->getArgOperand(1));
+  // A marker on the whole-object address (a zero-offset GEP or a cast of the
+  // alloca) starts the object's lifetime too. A field GEP does not, so only
+  // all-zero indices are stripped.
+  Value *V = II->getArgOperand(1);
+  while (true) {
+    if (auto *AI = dyn_cast<AllocaInst>(V))
+      return AI;
+    if (auto *GEP = dyn_cast<GEPOperator>(V)) {
+      if (!GEP->hasAllZeroIndices())
+        return nullptr;
+      V = GEP->getPointerOperand();
+    } else if (auto *CI = dyn_cast<CastInst>(V)) {
+      V = CI->getOperand(0);
+    } else
+      return nullptr;
+  }
 }
 
 /// An alloca that holds a GC pointer in memory (a local variable not promoted
