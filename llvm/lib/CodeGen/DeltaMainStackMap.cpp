@@ -14,5 +14,6 @@ using namespace llvm;
 using namespace llvm::deltamain;
 
 void Delta::emit(MCStreamer &OS) const {
-  OS.emitULEB128BitVector(StackSlots);
+  OS.emitULEB128BitVector(IndirectSlots);
+  OS.emitULEB128BitVector(DirectSlots);
 }

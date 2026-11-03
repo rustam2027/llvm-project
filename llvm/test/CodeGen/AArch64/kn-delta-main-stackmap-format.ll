@@ -12,9 +12,10 @@
 ;     size      .long   size of the function in bytes
 ;     base      SLEB128 offset of the first slot from the frame pointer (<= 0)
 ;     size      ULEB128 frame size
-;     live      ULEB128 bit vector: slot i is the slot at (base - 8 * i)
+;     live      two ULEB128 bit vectors, indirect slots then direct slots:
+;               slot i is the slot at (base - 8 * i)
 ;     calls     ULEB128 count, then (call return address offset, delta index)
-;     deltas    one ULEB128 bit vector per distinct delta; the live set of a
+;     deltas    two ULEB128 bit vectors per distinct delta; the live set of a
 ;               call is (live ^ delta)
 ;
 ; The runtime test DeltaMainStackMapTest uses the same byte sequences.
@@ -29,6 +30,10 @@
 ; RUN: llc -O0 %t/no-statepoints.ll -o - | FileCheck %t/no-statepoints.ll
 ; RUN: llc -O0 %t/other-strategy.ll -o - | FileCheck %t/other-strategy.ll
 ; RUN: llc -O0 %t/invoke.ll -o - | FileCheck %t/invoke.ll
+; RUN: llc -O0 %t/direct-slot.ll -o - | FileCheck %t/direct-slot.ll
+; RUN: llc -O2 %t/direct-slot.ll -o - | FileCheck %t/direct-slot.ll
+; RUN: not --crash llc -O0 %t/invalid-direct-slot.ll -o /dev/null 2>&1 | FileCheck %t/invalid-direct-slot.ll --check-prefix=INVALID
+; RUN: llc -O0 %t/stack-slot.ll -o - | FileCheck %t/stack-slot.ll
 ; RUN: llc -O2 %t/one-value.ll -o - | FileCheck %t/one-value.ll
 
 ;--- one-value.ll
@@ -58,11 +63,14 @@ define void @one(ptr addrspace(1) %a) gc "kotlin-native" {
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; base live set: one slot
 ; CHECK-NEXT: .byte 1
+; no direct slots
+; CHECK-NEXT: .byte 0
 ; one call
 ; CHECK-NEXT: .byte 1
 ; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_one
 ; CHECK-NEXT: .byte 0
 ; its delta is empty: the live set of the call is the base set
+; CHECK-NEXT: .byte 0
 ; CHECK-NEXT: .byte 0
 
 ;--- no-live-values.ll
@@ -82,11 +90,13 @@ define void @nolive() gc "kotlin-native" {
 ; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_nolive
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; CHECK-NEXT: .byte {{[0-9]+}}
-; empty base live set
+; empty base live sets
+; CHECK-NEXT: .byte 0
 ; CHECK-NEXT: .byte 0
 ; one call
 ; CHECK-NEXT: .byte 1
 ; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_nolive
+; CHECK-NEXT: .byte 0
 ; CHECK-NEXT: .byte 0
 ; CHECK-NEXT: .byte 0
 
@@ -153,6 +163,7 @@ define void @shrink(ptr addrspace(1) %a, ptr addrspace(1) %b) gc "kotlin-native"
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; the base set is the live set of the first call: two slots
 ; CHECK-NEXT: .byte 3
+; CHECK-NEXT: .byte 0
 ; two calls
 ; CHECK-NEXT: .byte 2
 ; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_shrink
@@ -162,7 +173,9 @@ define void @shrink(ptr addrspace(1) %a, ptr addrspace(1) %b) gc "kotlin-native"
 ; two deltas: empty for the first call; for the second call one slot is dropped
 ; (which one depends on the slot assignment: bit 0 or bit 1)
 ; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 0
 ; CHECK-NEXT: .byte {{1|2}}
+; CHECK-NEXT: .byte 0
 
 ;--- same-live-set.ll
 target triple = "arm64-apple-macosx"
@@ -188,6 +201,7 @@ define void @same(ptr addrspace(1) %a) gc "kotlin-native" {
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; CHECK-NEXT: .byte {{[0-9]+}}
 ; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .byte 0
 ; two calls, both with delta 0
 ; CHECK-NEXT: .byte 2
 ; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_same
@@ -195,6 +209,7 @@ define void @same(ptr addrspace(1) %a) gc "kotlin-native" {
 ; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_same
 ; CHECK-NEXT: .byte 0
 ; exactly one delta follows, then the section ends
+; CHECK-NEXT: .byte 0
 ; CHECK-NEXT: .byte 0
 ; CHECK-NOT:  .byte
 ; CHECK:      .subsections_via_symbols
@@ -291,3 +306,86 @@ lpad:
 
 ; CHECK:      .Lstackmap_delta_main_start._thrower:
 ; CHECK-NEXT: .long _thrower-.Lstackmap_delta_main_start._thrower
+
+;--- direct-slot.ll
+target triple = "arm64-apple-macosx"
+
+declare void @foo()
+declare void @use(ptr addrspace(1))
+declare token @llvm.experimental.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)
+
+; A whole Kotlin stack object starts with a pointer-sized ObjHeader word. It
+; has no relocate and is described by the second bit vector: the object itself
+; lives at the slot.
+%Object = type { i64, ptr addrspace(1), ptr addrspace(1) }
+
+define void @object(ptr addrspace(1) %typeInfo) gc "kotlin-native" {
+  %obj = alloca %Object, align 8, addrspace(1)
+  store ptr addrspace(1) %typeInfo, ptr addrspace(1) %obj
+  %t = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 0, i32 0, ptr elementtype(void ()) @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr addrspace(1) %obj) ]
+  call void @use(ptr addrspace(1) %obj)
+  ret void
+}
+
+; CHECK:      .Lstackmap_delta_main_start._object:
+; CHECK-NEXT: .long _object-.Lstackmap_delta_main_start._object
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_object
+; CHECK-NEXT: .byte {{[0-9]+}}
+; CHECK-NEXT: .byte {{[0-9]+}}
+; no indirect slots, one direct slot
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_object
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 0
+
+;--- invalid-direct-slot.ll
+target triple = "arm64-apple-macosx"
+
+declare void @foo()
+declare void @use(ptr addrspace(1))
+declare token @llvm.experimental.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)
+
+; Primitive AS1 storage is not a Kotlin object and cannot be a Direct GC root.
+define void @not_an_object() gc "kotlin-native" {
+  %obj = alloca i64, addrspace(1)
+  %t = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 0, i32 0, ptr elementtype(void ()) @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr addrspace(1) %obj) ]
+  call void @use(ptr addrspace(1) %obj)
+  ret void
+}
+
+; INVALID: kotlin-native: a Direct GC root must be a whole stack object with an ObjHeader
+
+;--- stack-slot.ll
+target triple = "arm64-apple-macosx"
+
+declare void @foo()
+declare void @use(ptr addrspace(1))
+declare token @llvm.experimental.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)
+
+; A local variable that stays in memory has no relocate: the root is the value in
+; the slot, so it is an indirect slot, unlike a stack object (direct-slot.ll).
+define void @slot(ptr addrspace(1) %a) gc "kotlin-native" {
+  %s = alloca ptr addrspace(1), align 8
+  store ptr addrspace(1) %a, ptr %s
+  %t = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 0, i32 0, ptr elementtype(void ()) @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr %s) ]
+  %v = load ptr addrspace(1), ptr %s
+  call void @use(ptr addrspace(1) %v)
+  ret void
+}
+
+; CHECK:      .Lstackmap_delta_main_start._slot:
+; CHECK-NEXT: .long _slot-.Lstackmap_delta_main_start._slot
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_slot
+; CHECK-NEXT: .byte {{[0-9]+}}
+; CHECK-NEXT: .byte {{[0-9]+}}
+; one indirect slot, no direct slots
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_slot
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 0
