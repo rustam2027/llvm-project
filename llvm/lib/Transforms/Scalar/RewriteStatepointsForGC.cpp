@@ -343,6 +343,10 @@ static void setKnownBase(Value *V, bool IsKnownBase,
 static Value *findBaseDefiningValue(Value *I, DefiningValueMapTy &Cache,
                                     IsKnownBaseMapTy &KnownBases);
 
+/// Defined below with the liveness helpers; strips GEPs and casts down to an
+/// alloca (the stack object itself).
+static AllocaInst *getStackObject(Value *V);
+
 /// Return a base defining value for the 'Index' element of the given vector
 /// instruction 'I'.  If Index is null, returns a BDV for the entire vector
 /// 'I'.  As an optimization, this method will try to determine when the
@@ -553,10 +557,23 @@ static Value *findBaseDefiningValue(Value *I, DefiningValueMapTy &Cache,
       // implications much.
       llvm_unreachable(
           "interaction with the gcroot mechanism is not supported");
-    case Intrinsic::experimental_gc_get_pointer_base:
+    case Intrinsic::experimental_gc_get_pointer_base: {
       auto *BDV = findBaseDefiningValue(II->getOperand(0), Cache, KnownBases);
       Cache[II] = BDV;
       return BDV;
+    }
+    case Intrinsic::kn_publish:
+      // A stack object published via kn.publish is rooted by the alloca
+      // itself: the publish result is the only GC-visible reference to the
+      // object, so the stack object is the base and is recorded as a Direct
+      // stack slot.  Otherwise (e.g. a runtime-call bridging result) the
+      // intrinsic result remains its own base, like any other call.
+      if (auto *AI = getStackObject(II->getArgOperand(0))) {
+        auto *BDV = findBaseDefiningValue(AI, Cache, KnownBases);
+        Cache[II] = BDV;
+        return BDV;
+      }
+      break;
     }
   }
   // We assume that functions in the source language only return base
@@ -1157,9 +1174,10 @@ static Value *findBasePointer(Value *I, DefiningValueMapTy &Cache,
     }
     assert(Base && "Can't be null");
     // The cast is needed since base traversal may strip away bitcasts
+    // (or reveal an addrspace(0) stack object as the base, see kn.publish).
     if (Base->getType() != Input->getType() && InsertPt)
-      Base = new BitCastInst(Base, Input->getType(), "cast",
-                             InsertPt->getIterator());
+      Base = CastInst::CreatePointerCast(Base, Input->getType(), "cast",
+                                         InsertPt->getIterator());
     return Base;
   };
 
@@ -1563,6 +1581,12 @@ static void CreateGCRelocates(ArrayRef<Value *> LiveVariables,
       assert(AI->isStaticAlloca() && "A dynamic alloca can not be a GC root");
       continue;
     }
+
+    // Values rooted by a stack object (e.g. published via kn.publish) don't
+    // move either: their base is not a gc pointer, so they cannot be
+    // relocated and stay as they are.
+    if (isa<AllocaInst>(BasePtrs[i]))
+      continue;
 
     // Generate the gc.relocate call and save the result
     Value *BaseIdx = Builder.getInt32(FindIndex(LiveVariables, BasePtrs[i]));
@@ -3528,6 +3552,16 @@ static void recomputeLiveInValues(GCPtrLivenessData &RevisedLivenessData,
   // to update the PointerToBase structure to reflect this.
   for (auto *V : Updated)
     PointerToBase.insert({ V, V });
+
+  // A stack object published via kn.publish has no use of its own after the
+  // statepoint, but its published reference keeps it live: record the object
+  // itself so it lands in the gc-live bundle as a Direct slot.
+  for (auto *V : Updated)
+    if (auto It = PointerToBase.find(V); It != PointerToBase.end())
+      if (auto *AI = dyn_cast<AllocaInst>(It->second);
+          AI && AI->isStaticAlloca())
+        if (Updated.insert(AI))
+          PointerToBase.insert({AI, AI});
 
   Info.LiveSet = Updated;
 }
