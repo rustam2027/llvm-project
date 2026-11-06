@@ -32,6 +32,8 @@
 ; RUN: llc -O0 %t/invoke.ll -o - | FileCheck %t/invoke.ll
 ; RUN: llc -O0 %t/direct-slot.ll -o - | FileCheck %t/direct-slot.ll
 ; RUN: llc -O2 %t/direct-slot.ll -o - | FileCheck %t/direct-slot.ll
+; RUN: llc -O0 %t/publish-direct-slot.ll -o - | FileCheck %t/publish-direct-slot.ll
+; RUN: llc -O2 %t/publish-direct-slot.ll -o - | FileCheck %t/publish-direct-slot.ll
 ; RUN: not --crash llc -O0 %t/invalid-direct-slot.ll -o /dev/null 2>&1 | FileCheck %t/invalid-direct-slot.ll --check-prefix=INVALID
 ; RUN: llc -O0 %t/stack-slot.ll -o - | FileCheck %t/stack-slot.ll
 ; RUN: llc -O2 %t/one-value.ll -o - | FileCheck %t/one-value.ll
@@ -337,6 +339,48 @@ define void @object(ptr addrspace(1) %typeInfo) gc "kotlin-native" {
 ; CHECK-NEXT: .byte 1
 ; CHECK-NEXT: .byte 1
 ; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_object
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 0
+
+;--- publish-direct-slot.ll
+target triple = "arm64-apple-macosx"
+
+declare void @foo()
+declare void @use(ptr addrspace(1))
+declare token @llvm.experimental.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)
+declare ptr addrspace(1) @llvm.kn.publish(ptr)
+
+; An escape-analyzed stack object lives in addrspace(0) and is published to
+; the GC with llvm.kn.publish (the publish result is the only GC-visible
+; reference).  The publish lowers to the alloca address, so the object is
+; rooted by its slot directly: it is described by the second bit vector,
+; with no ObjHeader-layout requirement (that check applies to addrspace(1)
+; allocas only) and no spill slot.
+%Object = type { i64, ptr addrspace(1) }
+
+define void @published(ptr addrspace(1) %typeInfo) gc "kotlin-native" {
+  %slot = alloca %Object, align 8
+  store ptr addrspace(1) %typeInfo, ptr %slot
+  %p = call ptr addrspace(1) @llvm.kn.publish(ptr %slot)
+  %t = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 0, i32 0, ptr elementtype(void ()) @foo, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr addrspace(1) %p) ]
+  call void @use(ptr addrspace(1) %p)
+  ret void
+}
+
+; The publish is an identity: the call argument is the object slot itself.
+; CHECK:      mov x0, sp
+; CHECK:      bl _use
+; CHECK:      .Lstackmap_delta_main_start._published:
+; CHECK-NEXT: .long _published-.Lstackmap_delta_main_start._published
+; CHECK-NEXT: .long Lkn_func_end{{[0-9]+}}-_published
+; CHECK-NEXT: .byte {{[0-9]+}}
+; CHECK-NEXT: .byte {{[0-9]+}}
+; no indirect slots, one direct slot
+; CHECK-NEXT: .byte 0
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .uleb128 Ltmp{{[0-9]+}}-_published
 ; CHECK-NEXT: .byte 0
 ; CHECK-NEXT: .byte 0
 ; CHECK-NEXT: .byte 0
