@@ -168,7 +168,7 @@ struct GCPtrLivenessData {
   /// Values defined in this block.
   MapVector<BasicBlock *, SetVector<Value *>> KillSet;
 
-  /// Allocas defined in this block: lifetime.start and stores to slots.
+  /// Allocas defined in this block: stores to slots.
   MapVector<BasicBlock *, SetVector<Value *>> MemoryKill;
 
   /// Values used in this block (and thus live); does not included values
@@ -3257,28 +3257,6 @@ bool RewriteStatepointsForGC::runOnFunction(Function &F, DominatorTree &DT,
 // TODO: Consider using bitvectors for liveness, the set of potentially
 // interesting values should be small and easy to pre-compute.
 
-static AllocaInst *getLifetimeStartAlloca(const Instruction &I) {
-  auto *II = dyn_cast<IntrinsicInst>(&I);
-  if (!II || II->getIntrinsicID() != Intrinsic::lifetime_start)
-    return nullptr;
-  // A marker on the whole-object address (a zero-offset GEP or a cast of the
-  // alloca) starts the object's lifetime too. A field GEP does not, so only
-  // all-zero indices are stripped.
-  Value *V = II->getArgOperand(1);
-  while (true) {
-    if (auto *AI = dyn_cast<AllocaInst>(V))
-      return AI;
-    if (auto *GEP = dyn_cast<GEPOperator>(V)) {
-      if (!GEP->hasAllZeroIndices())
-        return nullptr;
-      V = GEP->getPointerOperand();
-    } else if (auto *CI = dyn_cast<CastInst>(V)) {
-      V = CI->getOperand(0);
-    } else
-      return nullptr;
-  }
-}
-
 /// An alloca that holds a GC pointer in memory (a local variable not promoted
 /// to SSA). The GC root is its content.
 static bool isStackSlot(const AllocaInst *AI, GCStrategy *GC) {
@@ -3329,13 +3307,6 @@ static void computeLiveInValues(BasicBlock::reverse_iterator Begin,
   for (auto &I : make_range(Begin, End)) {
     // KILL/Def - Remove this definition from LiveIn
     LiveTmp.remove(&I);
-
-    // Allocas are defined by lifetime.start; the markers are not uses.
-    if (I.isLifetimeStartOrEnd()) {
-      if (auto *AI = getLifetimeStartAlloca(I))
-        LiveTmp.remove(AI);
-      continue;
-    }
 
     // Don't consider *uses* in PHI nodes, we handle their contribution to
     // predecessor blocks when we seed the LiveOut sets
@@ -3413,12 +3384,9 @@ static SetVector<Value *> computeKillSet(BasicBlock *BB, GCStrategy *GC) {
 static SetVector<Value *> computeMemoryKillSet(BasicBlock *BB,
                                                GCStrategy *GC) {
   SetVector<Value *> Kill;
-  for (Instruction &I : *BB) {
-    if (auto *AI = getLifetimeStartAlloca(I))
+  for (Instruction &I : *BB)
+    if (auto *AI = getStackSlotStore(I, GC))
       Kill.insert(AI);
-    else if (auto *AI = getStackSlotStore(I, GC))
-      Kill.insert(AI);
-  }
   return Kill;
 }
 
