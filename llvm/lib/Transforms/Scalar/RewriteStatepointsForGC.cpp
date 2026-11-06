@@ -3555,13 +3555,18 @@ static void recomputeLiveInValues(GCPtrLivenessData &RevisedLivenessData,
 
   // A stack object published via kn.publish has no use of its own after the
   // statepoint, but its published reference keeps it live: record the object
-  // itself so it lands in the gc-live bundle as a Direct slot.
+  // itself so it lands in the gc-live bundle as a Direct slot.  Collect
+  // first: inserting into Updated mid-iteration would reallocate it.
+  SmallVector<AllocaInst *> StackObjects;
   for (auto *V : Updated)
     if (auto It = PointerToBase.find(V); It != PointerToBase.end())
       if (auto *AI = dyn_cast<AllocaInst>(It->second);
-          AI && AI->isStaticAlloca())
-        if (Updated.insert(AI))
-          PointerToBase.insert({AI, AI});
+          AI && AI->isStaticAlloca() && !Updated.count(AI))
+        StackObjects.push_back(AI);
+  for (auto *AI : StackObjects) {
+    Updated.insert(AI);
+    PointerToBase.insert({AI, AI});
+  }
 
   Info.LiveSet = Updated;
 }
