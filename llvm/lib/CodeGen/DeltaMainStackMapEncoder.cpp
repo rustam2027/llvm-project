@@ -113,7 +113,7 @@ std::set<deltamain::Location> DeltaMainStackMapEncoder::collectBases(
 
   // Alloca roots are always their own base, with no separate derived
   // pointer, and (unlike the pairs above) are not restricted to
-  // Indirect/Register -- gc.statepoint alloca operands are typically
+  // Indirect/Direct -- gc.statepoint alloca operands are typically
   // Location::Direct (a frame address, not a loaded value).
   for (size_t I = RefPairsEnd; I < Locs.size(); ++I)
     Bases.insert(Locs[I]);
