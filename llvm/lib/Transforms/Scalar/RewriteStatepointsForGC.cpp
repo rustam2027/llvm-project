@@ -168,6 +168,9 @@ struct GCPtrLivenessData {
   /// Values defined in this block.
   MapVector<BasicBlock *, SetVector<Value *>> KillSet;
 
+  /// Allocas defined in this block: stores to slots.
+  MapVector<BasicBlock *, SetVector<Value *>> MemoryKill;
+
   /// Values used in this block (and thus live); does not included values
   /// killed within this block.
   MapVector<BasicBlock *, SetVector<Value *>> LiveSet;
@@ -339,6 +342,10 @@ static void setKnownBase(Value *V, bool IsKnownBase,
 
 static Value *findBaseDefiningValue(Value *I, DefiningValueMapTy &Cache,
                                     IsKnownBaseMapTy &KnownBases);
+
+/// Defined below with the liveness helpers; strips GEPs and casts down to an
+/// alloca (the stack object itself).
+static AllocaInst *getStackObject(Value *V);
 
 /// Return a base defining value for the 'Index' element of the given vector
 /// instruction 'I'.  If Index is null, returns a BDV for the entire vector
@@ -550,10 +557,23 @@ static Value *findBaseDefiningValue(Value *I, DefiningValueMapTy &Cache,
       // implications much.
       llvm_unreachable(
           "interaction with the gcroot mechanism is not supported");
-    case Intrinsic::experimental_gc_get_pointer_base:
+    case Intrinsic::experimental_gc_get_pointer_base: {
       auto *BDV = findBaseDefiningValue(II->getOperand(0), Cache, KnownBases);
       Cache[II] = BDV;
       return BDV;
+    }
+    case Intrinsic::kn_publish:
+      // A stack object published via kn.publish is rooted by the alloca
+      // itself: the publish result is the only GC-visible reference to the
+      // object, so the stack object is the base and is recorded as a Direct
+      // stack slot.  Otherwise (e.g. a runtime-call bridging result) the
+      // intrinsic result remains its own base, like any other call.
+      if (auto *AI = getStackObject(II->getArgOperand(0))) {
+        auto *BDV = findBaseDefiningValue(AI, Cache, KnownBases);
+        Cache[II] = BDV;
+        return BDV;
+      }
+      break;
     }
   }
   // We assume that functions in the source language only return base
@@ -592,6 +612,12 @@ static Value *findBaseDefiningValue(Value *I, DefiningValueMapTy &Cache,
   // stack, but in either case, this is simply a field load.  As a result,
   // this is a defining definition of the base just like a load is.
   if (isa<ExtractValueInst>(I)) {
+    Cache[I] = I;
+    setKnownBase(I, /* IsKnownBase */true, KnownBases);
+    return I;
+  }
+
+  if (isa<AllocaInst>(I)) {
     Cache[I] = I;
     setKnownBase(I, /* IsKnownBase */true, KnownBases);
     return I;
@@ -1148,9 +1174,10 @@ static Value *findBasePointer(Value *I, DefiningValueMapTy &Cache,
     }
     assert(Base && "Can't be null");
     // The cast is needed since base traversal may strip away bitcasts
+    // (or reveal an addrspace(0) stack object as the base, see kn.publish).
     if (Base->getType() != Input->getType() && InsertPt)
-      Base = new BitCastInst(Base, Input->getType(), "cast",
-                             InsertPt->getIterator());
+      Base = CastInst::CreatePointerCast(Base, Input->getType(), "cast",
+                                         InsertPt->getIterator());
     return Base;
   };
 
@@ -1549,6 +1576,18 @@ static void CreateGCRelocates(ArrayRef<Value *> LiveVariables,
   DenseMap<Type *, Function *> TypeToDeclMap;
 
   for (unsigned i = 0; i < LiveVariables.size(); i++) {
+    // No need to relocate allocas (live references in stack), they can't be moved by gc.
+    if (auto* AI = dyn_cast<AllocaInst>(LiveVariables[i])) {
+      assert(AI->isStaticAlloca() && "A dynamic alloca can not be a GC root");
+      continue;
+    }
+
+    // Values rooted by a stack object (e.g. published via kn.publish) don't
+    // move either: their base is not a gc pointer, so they cannot be
+    // relocated and stay as they are.
+    if (isa<AllocaInst>(BasePtrs[i]))
+      continue;
+
     // Generate the gc.relocate call and save the result
     Value *BaseIdx = Builder.getInt32(FindIndex(LiveVariables, BasePtrs[i]));
     Value *LiveIdx = Builder.getInt32(i);
@@ -2890,6 +2929,7 @@ static bool insertParsePoints(Function &F, DominatorTree &DT,
 #endif
   }
   unique_unsorted(Live);
+  llvm::erase_if(Live, [](Value *V) { return isa<AllocaInst>(V); });
 
 #ifndef NDEBUG
   // Validation check
@@ -3217,6 +3257,48 @@ bool RewriteStatepointsForGC::runOnFunction(Function &F, DominatorTree &DT,
 // TODO: Consider using bitvectors for liveness, the set of potentially
 // interesting values should be small and easy to pre-compute.
 
+/// An alloca that holds a GC pointer in memory (a local variable not promoted
+/// to SSA). The GC root is its content.
+static bool isStackSlot(const AllocaInst *AI, GCStrategy *GC) {
+  return AI->isStaticAlloca() &&
+         isHandledGCPointerType(AI->getAllocatedType(), GC) &&
+         !isHandledGCPointerType(AI->getType(), GC);
+}
+
+/// The slot V refers to: the slot itself or a zero-offset GEP or cast of it.
+static AllocaInst *getStackSlot(Value *V, GCStrategy *GC) {
+  while (true) {
+    if (auto *AI = dyn_cast<AllocaInst>(V))
+      return isStackSlot(AI, GC) ? AI : nullptr;
+    if (auto *GEP = dyn_cast<GEPOperator>(V)) {
+      if (!GEP->hasAllZeroIndices())
+        return nullptr;
+      V = GEP->getPointerOperand();
+    } else if (auto *CI = dyn_cast<CastInst>(V)) {
+      V = CI->getOperand(0);
+    } else
+      return nullptr;
+  }
+}
+
+static AllocaInst *getStackSlotStore(Instruction &I, GCStrategy *GC) {
+  auto *SI = dyn_cast<StoreInst>(&I);
+  return SI ? getStackSlot(SI->getPointerOperand(), GC) : nullptr;
+}
+
+static AllocaInst *getStackObject(Value *V) {
+  while (true) {
+    if (auto *AI = dyn_cast<AllocaInst>(V))
+      return AI;
+    if (auto *GEP = dyn_cast<GEPOperator>(V))
+      V = GEP->getPointerOperand();
+    else if (auto *CI = dyn_cast<CastInst>(V))
+      V = CI->getOperand(0);
+    else
+      return nullptr;
+  }
+}
+
 /// Compute the live-in set for the location rbegin starting from
 /// the live-out set of the basic block
 static void computeLiveInValues(BasicBlock::reverse_iterator Begin,
@@ -3231,10 +3313,24 @@ static void computeLiveInValues(BasicBlock::reverse_iterator Begin,
     if (isa<PHINode>(I))
       continue;
 
+    // Address arithmetic on a stack object only uses it where the result is used.
+    if ((isa<GetElementPtrInst>(I) || isa<CastInst>(I)) && getStackObject(&I))
+      continue;
+
+    // A store overwrites the whole slot.
+    AllocaInst *StoredSlot = getStackSlotStore(I, GC);
+    if (StoredSlot)
+      LiveTmp.remove(StoredSlot);
+
     // USE - Add to the LiveIn set for this instruction
     for (Value *V : I.operands()) {
       assert(!isUnhandledGCPointerType(V->getType(), GC) &&
              "support for FCA unimplemented");
+      if (auto *Slot = getStackSlot(V, GC)) {
+        if (Slot != StoredSlot)
+          LiveTmp.insert(Slot);
+        continue;
+      }
       if (isHandledGCPointerType(V->getType(), GC) && !isa<Constant>(V)) {
         // The choice to exclude all things constant here is slightly subtle.
         // There are two independent reasons:
@@ -3246,7 +3342,11 @@ static void computeLiveInValues(BasicBlock::reverse_iterator Begin,
         // locally exploit facts without respect to global reachability.  This
         // can create sections of code which are dynamically unreachable and
         // contain just about anything.  (see constants.ll in tests)
-        LiveTmp.insert(V);
+        // A pointer into a stack object is a use of the object itself.
+        if (auto *AI = getStackObject(V))
+          LiveTmp.insert(AI);
+        else
+          LiveTmp.insert(V);
       }
     }
   }
@@ -3263,8 +3363,12 @@ static void computeLiveOutSeed(BasicBlock *BB, SetVector<Value *> &LiveTmp,
       Value *V = PN->getIncomingValueForBlock(BB);
       assert(!isUnhandledGCPointerType(V->getType(), GC) &&
              "support for FCA unimplemented");
-      if (isHandledGCPointerType(V->getType(), GC) && !isa<Constant>(V))
-        LiveTmp.insert(V);
+      if (isHandledGCPointerType(V->getType(), GC) && !isa<Constant>(V)) {
+        if (auto *AI = getStackObject(V))
+          LiveTmp.insert(AI);
+        else
+          LiveTmp.insert(V);
+      }
     }
   }
 }
@@ -3275,6 +3379,15 @@ static SetVector<Value *> computeKillSet(BasicBlock *BB, GCStrategy *GC) {
     if (isHandledGCPointerType(I.getType(), GC))
       KillSet.insert(&I);
   return KillSet;
+}
+
+static SetVector<Value *> computeMemoryKillSet(BasicBlock *BB,
+                                               GCStrategy *GC) {
+  SetVector<Value *> Kill;
+  for (Instruction &I : *BB)
+    if (auto *AI = getStackSlotStore(I, GC))
+      Kill.insert(AI);
+  return Kill;
 }
 
 #ifndef NDEBUG
@@ -3313,6 +3426,7 @@ static void computeLiveInValues(DominatorTree &DT, Function &F,
   // Seed the liveness for each individual block
   for (BasicBlock &BB : F) {
     Data.KillSet[&BB] = computeKillSet(&BB, GC);
+    Data.MemoryKill[&BB] = computeMemoryKillSet(&BB, GC);
     auto &LiveSet = Data.LiveSet[&BB];
     LiveSet.clear();
     computeLiveInValues(BB.rbegin(), BB.rend(), LiveSet, GC);
@@ -3325,7 +3439,9 @@ static void computeLiveInValues(DominatorTree &DT, Function &F,
     auto &Out = Data.LiveOut[&BB] = SetVector<Value *>();
     computeLiveOutSeed(&BB, Out, GC);
     auto &In = Data.LiveIn[&BB] = Data.LiveSet[&BB];
-    In.set_union(Out);
+    SetVector<Value *> Flow = Out;
+    Flow.set_subtract(Data.MemoryKill[&BB]);
+    In.set_union(Flow);
     In.set_subtract(Data.KillSet[&BB]);
     if (!In.empty())
       Worklist.insert_range(predecessors(&BB));
@@ -3353,6 +3469,7 @@ static void computeLiveInValues(DominatorTree &DT, Function &F,
 
     // Apply the effects of this basic block
     SetVector<Value *> LiveTmp = LiveOut;
+    LiveTmp.set_subtract(Data.MemoryKill[BB]);
     LiveTmp.set_union(Data.LiveSet[BB]);
     LiveTmp.set_subtract(Data.KillSet[BB]);
 
@@ -3403,6 +3520,21 @@ static void recomputeLiveInValues(GCPtrLivenessData &RevisedLivenessData,
   // to update the PointerToBase structure to reflect this.
   for (auto *V : Updated)
     PointerToBase.insert({ V, V });
+
+  // A stack object published via kn.publish has no use of its own after the
+  // statepoint, but its published reference keeps it live: record the object
+  // itself so it lands in the gc-live bundle as a Direct slot.  Collect
+  // first: inserting into Updated mid-iteration would reallocate it.
+  SmallVector<AllocaInst *> StackObjects;
+  for (auto *V : Updated)
+    if (auto It = PointerToBase.find(V); It != PointerToBase.end())
+      if (auto *AI = dyn_cast<AllocaInst>(It->second);
+          AI && AI->isStaticAlloca() && !Updated.count(AI))
+        StackObjects.push_back(AI);
+  for (auto *AI : StackObjects) {
+    Updated.insert(AI);
+    PointerToBase.insert({AI, AI});
+  }
 
   Info.LiveSet = Updated;
 }

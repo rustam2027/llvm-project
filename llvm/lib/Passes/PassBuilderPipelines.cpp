@@ -123,7 +123,6 @@
 #include "llvm/Transforms/Scalar/MergedLoadStoreMotion.h"
 #include "llvm/Transforms/Scalar/NewGVN.h"
 #include "llvm/Transforms/Scalar/Reassociate.h"
-#include "llvm/Transforms/Scalar/RewriteStatepointsForGC.h"
 #include "llvm/Transforms/Scalar/SCCP.h"
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Scalar/SimpleLoopUnswitch.h"
@@ -2352,8 +2351,6 @@ PassBuilder::buildO0DefaultPipeline(OptimizationLevel Level,
   if (EnableLoopTrapAnalysis)
     MPM.addPass(createModuleToFunctionPassAdaptor(LoopTrapAnalysisPass()));
   MPM.addPass(createModuleToFunctionPassAdaptor(AnnotationRemarksPass()));
-
-  MPM.addPass(RewriteStatepointsForGC());
 
   return MPM;
 }
